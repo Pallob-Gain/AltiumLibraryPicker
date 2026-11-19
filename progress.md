@@ -10,6 +10,40 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-19 (later) — CSE login + automatic model download ✅ login verified live; full download pending one real part
+
+### 1. What was implemented
+- **Settings → Component Search Engine…**:
+  - Email and password fields.
+  - **Remember login**, encrypted with DPAPI and restored at startup; when unticked, the login is kept for this session only.
+  - **Sign in & test**, which asks CSE whether the login is valid.
+  - **Log out**, which deletes the saved login.
+  - The login status is shown next to the CSE button in step 3: "not signed in", "signed in" or "login rejected".
+- `alm/cse_client.py` is original code. It reads `.epw` part files (plain, or inside a zip) and downloads the model zip from CSE with your login, showing progress.
+  - It refuses redirects, so the login can't be forwarded elsewhere.
+  - It caps the download size and checks the result is a real zip.
+  - It shows CSE's own error text.
+  - It reports which folders the zip holds if there is no Altium library in it.
+- **From Component Search Engine…** now also handles `.epw`: CSE download button → app downloads the model → automatic import. It still imports full library zips directly.
+
+### 2. Verified
+- Against the live server:
+  - No login gives 401 (`Basic realm="Samacsys Parts Database"`).
+  - **Your real login was accepted.**
+  - An unknown part ID gives "Error: no part data available for partID 1", which is now shown as a clear message.
+- 64 offline tests pass, 11 of them new for the client.
+- The password never appears in the code, logs, settings or the repo; the live tests passed it through environment variables only.
+
+### 3. Still to test (needs one click on CSE)
+A real model download needs a real part ID. That comes from the `.epw` that CSE's download button saves. CSE pages are behind Cloudflare and are not scraped.
+1. In the app, enter an MPN and select destination copies.
+2. Settings → Component Search Engine → **Sign in & test**.
+3. Click **From Component Search Engine…**, then click the part's download button on CSE.
+
+Whether CSE's model zip contains Altium files (SchLib/PcbLib/IntLib) depends on your CSE account's ECAD setting. If it has no Altium library, the app says so and lists the folders it found.
+
+---
+
 ## 2026-11-19 — Component Search Engine integration (browser workflow) ✅ (pending your test with a real CSE account)
 
 ### 1. What was implemented

@@ -93,9 +93,10 @@ class CredentialStore:
         except Exception:  # corrupted, or encrypted by another Windows user
             return ""
 
-    def set(self, name: str, value: str) -> None:
+    def set(self, name: str, value: str, strip: bool = True) -> None:
+        """strip=False keeps leading/trailing spaces (passwords)."""
         data = self._read()
-        value = (value or "").strip()
+        value = (value or "").strip() if strip else (value or "")
         if value:
             data[name] = base64.b64encode(protect(value.encode("utf-8"))).decode("ascii")
         else:

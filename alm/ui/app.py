@@ -26,6 +26,8 @@ from ..providers.links import ALTIUM_MPS_HELP, MANUAL_SOURCES
 from ..providers.mouser import CRED_NAME as MOUSER_CRED
 from ..search import SearchOutcome, run_search
 from ..cse import CSE_HOME, DownloadWatcher, claim, default_downloads_dir, human_size
+from ..cse_client import (CRED_EMAIL, CRED_PASSWORD, CseAuthError, CseClient, CseError,
+                          read_epw)
 from ..easyeda.fetch import UNOFFICIAL_NOTE, clean_lcsc, fetch_and_build
 from ..schlib_reader import best_match, list_symbols
 from ..sources import resolve_source
@@ -56,6 +58,9 @@ class App:
         self.work_dir = app_dir()
         self._watcher: DownloadWatcher | None = None
         self._auto_import_next = False
+        self._progress_text = ""
+        # CSE login: restored from the encrypted store ("Remember login"), or session-only
+        self._cse_login = (creds.get(CRED_EMAIL), creds.get(CRED_PASSWORD))
         self._queue: queue.Queue = queue.Queue()
         self._busy = False
         self._build()
@@ -135,7 +140,10 @@ class App:
             side="left", padx=4)
         self.cse_btn = ttk.Button(bf, text="From Component Search Engine...",
                                   command=self._cse_toggle)
-        self.cse_btn.pack(side="left", padx=(12, 4))
+        self.cse_btn.pack(side="left", padx=(12, 2))
+        self.cse_login_var = tk.StringVar()
+        ttk.Label(bf, textvariable=self.cse_login_var, foreground="#555").pack(side="left",
+                                                                                padx=(0, 8))
         ttk.Button(bf, text="From SamacSys library...", command=self._from_samacsys).pack(
             side="left", padx=(0, 4))
         ttk.Label(bf, text="   or LCSC #:").pack(side="left")
@@ -214,6 +222,7 @@ class App:
         self._set_info([("Paste an MPN and press Search, or go straight to step 3 with a library "
                          "you already downloaded.", "")])
 
+        self._cse_update_login_label()
         self.status_var = tk.StringVar(value="Ready.")
         ttk.Label(r, textvariable=self.status_var, relief="sunken", anchor="w",
                   padding=(6, 2)).pack(fill="x", side="bottom")
@@ -239,16 +248,21 @@ class App:
         self.root.after(200, lambda: self._poll(on_done))
 
     def _poll(self, on_done) -> None:
+        if self._progress_text:                       # set by worker threads (plain str)
+            self.status_var.set(self._progress_text)
         try:
             value, err = self._queue.get_nowait()
         except queue.Empty:
             self.root.after(200, lambda: self._poll(on_done))
             return
         self._busy = False
+        self._progress_text = ""
         for b in (self.search_btn, self.import_btn, self.lcsc_btn):
             b.state(["!disabled"])
         if err is not None:
             self._auto_import_next = False
+            if isinstance(err, CseAuthError):
+                self._cse_update_login_label(rejected=True)
             self.status_var.set(f"Failed: {err}")
             self._set_info([(f"Failed: {err}", "err")])
             return
@@ -485,12 +499,14 @@ class App:
         webbrowser.open(src.url(mpn))
         self._watcher = DownloadWatcher(folder, mpn)
         self.cse_btn.configure(text="Stop waiting for CSE download")
+        signed_in = all(self._cse_login)
         steps = [("Component Search Engine - opened in your browser for " + mpn + "\n", "bold"),
-                 ("  1. Sign in on componentsearchengine.com in the browser (your browser "
-                  "remembers the login).\n", ""),
-                 ("  2. Open the part and click Download, choose Altium Designer.\n", ""),
-                 (f"  3. This app watches {folder} and picks the file up when it is "
-                  "complete.\n", "")]
+                 ("  1. Open the part and click its download button (ECAD model).\n", ""),
+                 (f"  2. This app watches {folder}. A full library zip is imported directly; "
+                  "a Library Loader part file (.epw) makes the app download the model itself "
+                  + ("with your saved CSE login.\n" if signed_in else
+                     "- for that, sign in under Settings > Component Search Engine.\n"),
+                  "" if signed_in else "warn")]
         if auto:
             steps.append((f"  It is then imported automatically into:\n    {self.dst_sch.get()}\n"
                           f"    {self.dst_pcb.get()}\n  (backed up first, never overwrites "
@@ -536,11 +552,60 @@ class App:
                                  "is running it may have moved the file - use 'From SamacSys "
                                  "library...' instead.", parent=self.root)
             return
+        try:
+            epw = read_epw(copy)
+        except (CseError, OSError) as e:
+            messagebox.showerror("Component Search Engine", str(e), parent=self.root)
+            return
+        if epw:
+            self._cse_fetch(epw)
+            return
         if not st.matches_mpn:
             self.status_var.set(f"Note: {st.path.name} does not contain the MPN in its name - "
                                 "check the component.")
         self._auto_import_next = bool(self.settings.get("cse_auto_import", True))
         self._load_download(copy)
+
+    def _cse_fetch(self, epw) -> None:
+        """Download the model for a CSE part file with the user's CSE login, then import."""
+        email, password = self._cse_login
+        if not (email and password):
+            messagebox.showwarning(
+                "Component Search Engine", f"Got the part file for {epw.mpn or epw.part_id}. "
+                "To download the model, sign in under Settings > Component Search Engine, then "
+                "click the download button on CSE again.", parent=self.root)
+            self._cse_dialog()
+            return
+        for key, val in (("Manufacturer Part Number", epw.mpn), ("Manufacturer", epw.manufacturer)):
+            if val and not self.param_vars[key].get().strip():
+                self.param_vars[key].set(val)
+        out = self.work_dir / "downloads" / f"cse-{epw.part_id}-{os.getpid()}-{id(epw)}"
+
+        def progress(done, total):
+            self._progress_text = (f"Downloading {epw.mpn or epw.part_id} from Component Search "
+                                   f"Engine: {human_size(done)}"
+                                   + (f" of {human_size(total)}" if total else ""))
+
+        def task():
+            return CseClient(email, password).download(epw.part_id, out, progress)
+
+        def done(path):
+            self._cse_update_login_label(verified=True)
+            self._auto_import_next = bool(self.settings.get("cse_auto_import", True))
+            self._load_download(path)
+
+        self._run_bg(f"Downloading {epw.mpn or epw.part_id} from Component Search Engine...",
+                     task, done)
+
+    def _cse_update_login_label(self, verified: bool = False, rejected: bool = False) -> None:
+        email, password = self._cse_login
+        if rejected:
+            text = "CSE: login rejected"
+        elif email and password:
+            text = f"CSE: {email}" + (" (signed in)" if verified else "")
+        else:
+            text = "CSE: not signed in"
+        self.cse_login_var.set(text)
 
     def _cse_dialog(self) -> None:
         dlg = tk.Toplevel(self.root)
@@ -549,29 +614,88 @@ class App:
         dlg.grab_set()
         frm = ttk.Frame(dlg, padding=10)
         frm.pack(fill="both", expand=True)
-        ttk.Label(frm, wraplength=560, justify="left", text=(
-            "Sign-in: in your web browser. Component Search Engine has no public API for other "
-            "applications, and its operator's terms (Supplyframe) do not allow software to send "
-            "automated searches or downloads. So this app does not ask for, store or send your "
-            "CSE email/password. You sign in on componentsearchengine.com in your browser (it "
-            "remembers you); this app opens the search there and imports the file you download."
+        ttk.Label(frm, wraplength=580, justify="left", text=(
+            "Your componentsearchengine.com login is used only to download models of parts you "
+            "click on CSE (same as the SamacSys Library Loader). It is sent only to "
+            "componentsearchengine.com over HTTPS. With 'Remember login' it is stored encrypted "
+            "for your Windows account (DPAPI); otherwise it is kept only until the app closes."
         )).grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Button(frm, text="Open componentsearchengine.com (sign in / sign out)",
-                   command=lambda: webbrowser.open(CSE_HOME)).grid(row=1, column=0, columnspan=3,
-                                                                   sticky="w", pady=6)
-        ttk.Label(frm, text="Watch this download folder:").grid(row=2, column=0, sticky="w")
+        email_var = tk.StringVar(value=self._cse_login[0])
+        pw_var = tk.StringVar(value=self._cse_login[1])
+        remember = tk.BooleanVar(value=bool(self.creds.get(CRED_EMAIL)))
+        ttk.Label(frm, text="Email:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(frm, textvariable=email_var, width=40).grid(row=1, column=1, sticky="w",
+                                                              pady=(8, 0))
+        ttk.Label(frm, text="Password:").grid(row=2, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=pw_var, width=40, show="*").grid(row=2, column=1, sticky="w")
+        ttk.Checkbutton(frm, variable=remember, text="Remember login (encrypted, restored when "
+                        "the app starts)").grid(row=3, column=1, sticky="w")
+        status = tk.StringVar(value=self.cse_login_var.get())
+        ttk.Label(frm, textvariable=status, foreground="#555").grid(row=4, column=1, sticky="w")
+
+        def store(email, pw):
+            self._cse_login = (email, pw)
+            try:
+                if remember.get():
+                    self.creds.set(CRED_EMAIL, email)
+                    self.creds.set(CRED_PASSWORD, pw, strip=False)
+                else:
+                    self.creds.set(CRED_EMAIL, "")
+                    self.creds.set(CRED_PASSWORD, "")
+            except Exception as e:
+                log.exception("Saving CSE login failed")
+                messagebox.showerror("Error", f"Could not save the login: {e}", parent=dlg)
+
+        def sign_in():
+            email, pw = email_var.get().strip(), pw_var.get()
+            if not (email and pw):
+                status.set("Enter email and password.")
+                return
+            status.set("Checking with componentsearchengine.com ...")
+            dlg.update_idletasks()
+            try:
+                CseClient(email, pw).check_login()
+            except CseAuthError as e:
+                status.set(str(e))
+                self._cse_update_login_label(rejected=True)
+                return
+            except CseError as e:
+                status.set(f"Could not check the login: {e}")
+                return
+            store(email, pw)
+            self._cse_update_login_label(verified=True)
+            status.set(f"Signed in as {email}" + (" (remembered)" if remember.get() else
+                                                  " (this session only)"))
+
+        def log_out():
+            self._cse_login = ("", "")
+            self.creds.set(CRED_EMAIL, "")
+            self.creds.set(CRED_PASSWORD, "")
+            pw_var.set("")
+            self._cse_update_login_label()
+            status.set("Logged out - the saved login was deleted.")
+
+        lb = ttk.Frame(frm)
+        lb.grid(row=5, column=1, sticky="w", pady=4)
+        ttk.Button(lb, text="Sign in & test", command=sign_in).pack(side="left")
+        ttk.Button(lb, text="Log out", command=log_out).pack(side="left", padx=4)
+        ttk.Button(lb, text="Open componentsearchengine.com",
+                   command=lambda: webbrowser.open(CSE_HOME)).pack(side="left", padx=4)
+
+        ttk.Separator(frm).grid(row=6, column=0, columnspan=3, sticky="ew", pady=8)
+        ttk.Label(frm, text="Watch this download folder:").grid(row=7, column=0, sticky="w")
         folder = tk.StringVar(value=str(self._cse_folder()))
-        ttk.Entry(frm, textvariable=folder, width=50).grid(row=2, column=1, padx=4)
+        ttk.Entry(frm, textvariable=folder, width=50).grid(row=7, column=1, padx=4, sticky="w")
 
         def browse():
             p = filedialog.askdirectory(parent=dlg, initialdir=folder.get())
             if p:
                 folder.set(os.path.normpath(p))
-        ttk.Button(frm, text="Browse...", command=browse).grid(row=2, column=2)
+        ttk.Button(frm, text="Browse...", command=browse).grid(row=7, column=2)
         auto = tk.BooleanVar(value=bool(self.settings.get("cse_auto_import", True)))
         ttk.Checkbutton(frm, variable=auto, text="Import into the destination libraries "
                         "automatically when the download is complete").grid(
-            row=3, column=0, columnspan=3, sticky="w", pady=6)
+            row=8, column=0, columnspan=3, sticky="w", pady=6)
 
         def save():
             if not Path(folder.get()).is_dir():
@@ -580,9 +704,13 @@ class App:
             same = Path(folder.get()) == default_downloads_dir()
             self.settings.set("cse_watch_dir", "" if same else folder.get())
             self.settings.set("cse_auto_import", auto.get())
+            email, pw = email_var.get().strip(), pw_var.get()
+            if (email, pw) != self._cse_login and email and pw:
+                store(email, pw)              # saved without testing; tested on first download
+                self._cse_update_login_label()
             self.status_var.set("Component Search Engine settings saved.")
             dlg.destroy()
-        ttk.Button(frm, text="Save", command=save).grid(row=4, column=2, sticky="e")
+        ttk.Button(frm, text="Save && close", command=save).grid(row=9, column=2, sticky="e")
 
     # ================= SamacSys Library Loader library =================
     def _from_samacsys(self) -> None:

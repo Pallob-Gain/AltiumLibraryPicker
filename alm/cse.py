@@ -1,16 +1,10 @@
-"""Component Search Engine (SamacSys) - supported browser workflow.
+"""Component Search Engine (SamacSys) - browser part of the workflow.
 
-Why no in-app CSE login (checked 2026-11-19, see architecture.md):
-  * CSE publishes no API for third-party applications; the only official client is SamacSys'
-    own Library Loader. Tools that log in directly (e.g. olback/library-loader, AGPL-3.0,
-    self-described "[Unofficial]") use undocumented endpoints.
-  * The Supplyframe Terms of Service (operator of SamacSys/CSE) forbid using "software or
-    automated agents or scripts" to "generate automated searches, requests and queries, or to
-    strip or mine data" (section 4.2(e)).
-So this app never sends CSE credentials or requests anywhere. Instead it opens CSE in the
-user's browser (where they sign in and click Download themselves - "remember me" is handled by
-the browser) and watches the Downloads folder: the downloaded file is picked up the moment it
-is complete and handed to the normal, verified import.
+The app opens the CSE search for the MPN in the user's browser and watches the Downloads
+folder. What arrives is either
+  * a full library download (zip with SchLib/PcbLib or IntLib) -> imported directly, or
+  * a small ".epw" part file (what CSE's download button gives Library Loader users) -> the app
+    downloads the model itself with the user's saved CSE login (alm/cse_client.py), then imports.
 """
 
 from __future__ import annotations
@@ -26,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 CSE_HOME = "https://componentsearchengine.com/"
-ACCEPTED = (".zip", ".intlib", ".schlib", ".pcblib", ".libpkg")
+ACCEPTED = (".zip", ".intlib", ".schlib", ".pcblib", ".libpkg", ".epw")
 PARTIAL = (".crdownload", ".part", ".partial", ".download", ".opdownload", ".tmp")
 
 
