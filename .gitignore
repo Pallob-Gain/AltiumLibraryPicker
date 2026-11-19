@@ -12,3 +12,6 @@ __Previews/
 settings.json
 credentials.json
 *.db
+build/
+dist/
+*.spec

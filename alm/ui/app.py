@@ -37,7 +37,7 @@ ALL_COMPONENTS = "(all components)"
 # browser sites whose ECAD download is picked up from the Downloads folder:
 # key -> (button text, what to click on the site)
 WATCH_SITES = {
-    "cse": ("From Component Search Engine...",
+    "cse": ("From Component Search Engine (CSE)...",
             "Open the part and click its download button (ECAD model)."),
     "mouser_web": ("From Mouser (ECAD model)...",
                    "Open the part and click the ECAD Model icon (SamacSys symbol, footprint, 3D) "
@@ -79,8 +79,11 @@ class App:
     def _build(self) -> None:
         r = self.root
         r.title(f"Altium Library Manager {__version__}")
-        r.geometry("1180x880")
-        r.minsize(980, 760)
+        # fit small / scaled laptop screens (taskbar + title bar need ~90 px)
+        w = min(1180, r.winfo_screenwidth() - 40)
+        h = min(900, r.winfo_screenheight() - 90)
+        r.geometry(f"{w}x{h}+{max(0, (r.winfo_screenwidth() - w) // 2)}+10")
+        r.minsize(min(980, w), min(700, h))
 
         menubar = tk.Menu(r)
         m = tk.Menu(menubar, tearoff=False)
@@ -106,7 +109,7 @@ class App:
 
         # ---- 2. Results + library sites ----
         mid = ttk.Frame(r)
-        mid.pack(fill="both", expand=True, padx=8)
+        # packed at the end of _build (bottom-up) so a short window shrinks the results table
         res = ttk.LabelFrame(mid, text="2. Search results (double-click opens the source page)",
                              padding=6)
         res.pack(side="left", fill="both", expand=True)
@@ -129,17 +132,22 @@ class App:
 
         sites = ttk.LabelFrame(mid, text="Find a library (opens the site's search page)", padding=6)
         sites.pack(side="left", fill="y", padx=(8, 0))
-        for src in MANUAL_SOURCES:
-            ttk.Button(sites, text=src.name, width=26,
-                       command=lambda s=src: self._open_site(s)).pack(fill="x", pady=1)
+        # two columns so it fits short screens
+        for i, src in enumerate(MANUAL_SOURCES):
+            label = "CSE (SamacSys)" if src.key == "cse" else src.name
+            ttk.Button(sites, text=label, width=17,
+                       command=lambda s=src: self._open_site(s)).grid(
+                row=i // 2, column=i % 2, sticky="ew", padx=1, pady=1)
+        last = (len(MANUAL_SOURCES) + 1) // 2
         ttk.Button(sites, text="Altium Manufacturer Part Search",
-                   command=self._altium_mps).pack(fill="x", pady=1)
-        ttk.Button(sites, text="Open ALL sites", command=self._open_all_sites).pack(fill="x",
-                                                                                   pady=(6, 0))
+                   command=self._altium_mps).grid(row=last, column=0, columnspan=2,
+                                                  sticky="ew", padx=1, pady=1)
+        ttk.Button(sites, text="Open ALL sites", command=self._open_all_sites).grid(
+            row=last + 1, column=0, columnspan=2, sticky="ew", padx=1, pady=(6, 0))
 
         # ---- 3. Import ----
         imp = ttk.LabelFrame(r, text="3. Import into Altium", padding=6)
-        imp.pack(fill="x", padx=8, pady=4)
+        # (packed at the end of _build)
         imp.columnconfigure(1, weight=1)
         ttk.Label(imp, text="Downloaded library:").grid(row=0, column=0, sticky="w")
         bf = ttk.Frame(imp)
@@ -148,25 +156,28 @@ class App:
                    command=self._pick_download_file).pack(side="left")
         ttk.Button(bf, text="Select folder...", command=self._pick_download_folder).pack(
             side="left", padx=4)
-        self.cse_btn = ttk.Button(bf, text=WATCH_SITES["cse"][0],
-                                  command=lambda: self._cse_toggle("cse"))
-        self.cse_btn.pack(side="left", padx=(12, 2))
-        self.mouser_btn = ttk.Button(bf, text=WATCH_SITES["mouser_web"][0],
+
+        ttk.Label(imp, text="Get it automatically:").grid(row=1, column=0, sticky="w")
+        af = ttk.Frame(imp)
+        af.grid(row=1, column=1, columnspan=2, sticky="w", pady=(0, 4))
+        self.mouser_btn = ttk.Button(af, text=WATCH_SITES["mouser_web"][0],
                                      command=lambda: self._cse_toggle("mouser_web"))
-        self.mouser_btn.pack(side="left", padx=(0, 2))
+        self.mouser_btn.pack(side="left")
+        self.cse_btn = ttk.Button(af, text=WATCH_SITES["cse"][0],
+                                  command=lambda: self._cse_toggle("cse"))
+        self.cse_btn.pack(side="left", padx=(4, 2))
         self._site_btns = {"cse": self.cse_btn, "mouser_web": self.mouser_btn}
         self.cse_login_var = tk.StringVar()
-        ttk.Label(bf, textvariable=self.cse_login_var, foreground="#555").pack(side="left",
-                                                                                padx=(0, 8))
-        ttk.Button(bf, text="From SamacSys library...", command=self._from_samacsys).pack(
-            side="left", padx=(0, 4))
-        ttk.Label(bf, text="   or LCSC #:").pack(side="left")
+        ttk.Label(af, textvariable=self.cse_login_var, foreground="#555").pack(side="left",
+                                                                                padx=(0, 6))
+        ttk.Button(af, text="From SamacSys library...", command=self._from_samacsys).pack(
+            side="left")
+        ttk.Label(af, text="    EasyEDA by LCSC #:").pack(side="left")
         self.lcsc_var = tk.StringVar()
-        lcsc_entry = ttk.Entry(bf, textvariable=self.lcsc_var, width=12)
+        lcsc_entry = ttk.Entry(af, textvariable=self.lcsc_var, width=10)
         lcsc_entry.pack(side="left", padx=4)
         lcsc_entry.bind("<Return>", lambda e: self._fetch_lcsc())
-        self.lcsc_btn = ttk.Button(bf, text="Fetch from EasyEDA (unofficial)",
-                                   command=self._fetch_lcsc)
+        self.lcsc_btn = ttk.Button(af, text="Fetch", command=self._fetch_lcsc)
         self.lcsc_btn.pack(side="left")
 
         self.src_sch = tk.StringVar()
@@ -174,10 +185,10 @@ class App:
         self.dst_sch = tk.StringVar(value=self.settings.get("schlib", ""))
         self.dst_pcb = tk.StringVar(value=self.settings.get("pcblib", ""))
         self.comp_var = tk.StringVar()
-        rows = [(1, "Source SchLib:", self.src_sch, ".SchLib", None),
-                (2, "Source PcbLib:", self.src_pcb, ".PcbLib", None),
-                (4, "Destination SchLib:", self.dst_sch, ".SchLib", "schlib"),
-                (5, "Destination PcbLib:", self.dst_pcb, ".PcbLib", "pcblib")]
+        rows = [(2, "Source SchLib:", self.src_sch, ".SchLib", None),
+                (3, "Source PcbLib:", self.src_pcb, ".PcbLib", None),
+                (5, "Destination SchLib:", self.dst_sch, ".SchLib", "schlib"),
+                (6, "Destination PcbLib:", self.dst_pcb, ".PcbLib", "pcblib")]
         for i, label, var, ext, key in rows:
             ttk.Label(imp, text=label).grid(row=i, column=0, sticky="w")
             ttk.Entry(imp, textvariable=var, state="readonly").grid(row=i, column=1, sticky="ew",
@@ -185,14 +196,14 @@ class App:
             ttk.Button(imp, text="Select...",
                        command=lambda v=var, x=ext, k=key: self._pick_lib(v, x, k)).grid(
                 row=i, column=2)
-        ttk.Label(imp, text="Component to import:").grid(row=3, column=0, sticky="w")
+        ttk.Label(imp, text="Component to import:").grid(row=4, column=0, sticky="w")
         self.comp_box = ttk.Combobox(imp, textvariable=self.comp_var, state="readonly")
-        self.comp_box.grid(row=3, column=1, sticky="ew", padx=4, pady=1)
+        self.comp_box.grid(row=4, column=1, sticky="ew", padx=4, pady=1)
         self.src_sch.trace_add("write", lambda *a: self._refresh_components())
 
         pf = ttk.LabelFrame(imp, text="Component parameters (blank = keep library value; "
                                       "'LCSC Part #' is always created)", padding=4)
-        pf.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        pf.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(6, 0))
         self.param_vars: dict[str, tk.StringVar] = {}
         for i, name in enumerate(PARAM_FIELDS):
             var = tk.StringVar()
@@ -205,7 +216,7 @@ class App:
         pf.columnconfigure(3, weight=1)
 
         of = ttk.Frame(imp)
-        of.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        of.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(6, 0))
         ttk.Label(of, text="If the name already exists:").pack(side="left")
         self.conflict_var = tk.StringVar(value=self.settings.get("on_conflict", "skip"))
         ttk.Radiobutton(of, text="Skip (never overwrite)", value="skip",
@@ -223,7 +234,7 @@ class App:
 
         # ---- Messages ----
         msg = ttk.LabelFrame(r, text="Messages", padding=4)
-        msg.pack(fill="both", padx=8, pady=(0, 4))
+        # (packed at the end of _build)
         self.info = tk.Text(msg, height=9, wrap="word", font=("Segoe UI", 9))
         sb = ttk.Scrollbar(msg, orient="vertical", command=self.info.yview)
         self.info.configure(yscrollcommand=sb.set)
@@ -240,6 +251,9 @@ class App:
         self.status_var = tk.StringVar(value="Ready.")
         ttk.Label(r, textvariable=self.status_var, relief="sunken", anchor="w",
                   padding=(6, 2)).pack(fill="x", side="bottom")
+        msg.pack(side="bottom", fill="both", padx=8, pady=(0, 4))
+        imp.pack(side="bottom", fill="x", padx=8, pady=4)
+        mid.pack(fill="both", expand=True, padx=8)
 
     # ================= background tasks =================
     def _run_bg(self, label: str, func, on_done) -> None:
@@ -947,5 +961,11 @@ def run_gui(settings: Settings, creds: CredentialStore, db: Database, providers:
         ttk.Style(root).theme_use("vista")
     except tk.TclError:
         pass
+    icon = Path(__file__).with_name("app.ico")      # also bundled inside the .exe
+    if icon.exists():
+        try:
+            root.iconbitmap(default=str(icon))
+        except tk.TclError:
+            pass
     App(root, settings, creds, db, providers)
     root.mainloop()

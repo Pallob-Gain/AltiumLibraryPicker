@@ -10,6 +10,24 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-19 — v1.0.0: one-file Windows app ✅
+
+- **`AltiumLibraryManager.exe`** (about 12 MB, PyInstaller one-file, windowed) includes Python, Tk and the Altium scripts. No installation is needed. It is published on the GitHub Releases page. Rebuild with `python tools/build_exe.py`.
+- **App icon** (`alm/ui/app.ico`, drawn by `tools/make_icon.py`) is used for the .exe and the window.
+- **Mouser API key:** verified it is not in any project file or anywhere in the Git history. Every user enters their own key under Settings → API keys (DPAPI-encrypted).
+- **UI made beginner/laptop friendly:**
+  - The window sizes itself to the screen.
+  - Step 3 is split into "Downloaded library" and "Get it automatically" rows.
+  - The site buttons are in two columns.
+  - Messages and the status bar always stay visible.
+- **README** rewritten for beginners: download → double-click → SmartScreen note → setup table → four ways to get a part → what the import does → troubleshooting.
+- **Verified:**
+  - Inside the packed .exe, the app finds both Altium scripts and the icon, and locates Altium.
+  - The window opens in about 3.5 s.
+  - 66 tests pass.
+
+---
+
 ## 2026-11-19 (latest) — Mouser ECAD download + automatic 3D model ✅ verified with your real download
 
 ### 1. What was implemented

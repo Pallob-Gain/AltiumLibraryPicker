@@ -1,84 +1,107 @@
+<p align="center"><img src="alm/ui/app_preview.png" width="110" alt="Altium Library Manager icon"></p>
+
 # Altium Library Manager
 
-A Windows tool that takes you from a manufacturer part number (MPN) to a linked symbol and footprint in **your own** Altium `.SchLib` / `.PcbLib`.
+**Get a part into your own Altium library in a few clicks:** symbol, footprint and 3D model, linked and ready to place.
 
-It runs without Claude, AI services or subscriptions, using only the Python standard library.
+Type a manufacturer part number (MPN), click **From Mouser (ECAD model)…**, click the ECAD model icon on the Mouser page that opens, and the part is imported into **your own** `.SchLib` / `.PcbLib` automatically:
+- the footprint is linked to the symbol;
+- the 3D model is attached;
+- the parameters are filled in;
+- your libraries are backed up first.
 
-## Requirements
-- Windows 10/11 and Altium Designer (tested on AD26 26.10.1.5)
-- Python 3.10 or newer from [python.org](https://www.python.org/downloads/). Tick **"Add python.exe to PATH"** during setup. No `pip install` is needed; the app uses only the Python standard library.
-- Optional: a free [Mouser Search API key](https://www.mouser.com/api-search/), for MPN search. Set it under Settings → API keys. It is stored encrypted for your Windows account and never written to the project folder.
+Free and open source (MIT). No Python or other software to install. It works with Altium Designer on Windows 10/11.
 
-## Download and start
-1. On GitHub, click **Code → Download ZIP** and unzip it anywhere. You can also run `git clone https://github.com/Shihabul-glitch/Altium_Library_Mangement.git`.
-2. Double-click **`Altium Library Manager.bat`**, or run `python -m alm` in the folder.
-3. Have Altium Designer running. The app drives Altium through its scripting system, so nothing needs to be installed in Altium.
+![Main window](docs/screenshot.png)
 
-**Try it on copies of your libraries first.** Both destination libraries are backed up before every import, but test on copies before using it on libraries that matter.
+---
 
-## Workflow
-1. **Part number:** paste the MPN and press Enter.
-   - Mouser checks the exact MPN and fills in the manufacturer, description and datasheet parameters.
-   - Green rows are exact matches. Orange rows are *similar, NOT exact*: they are different parts, so never use them.
-2. **Find a library:** click a site button, or **Open ALL sites**, to open each site's search page for the MPN. Download the Altium library manually.
-3. **Import into Altium:**
-   1. Choose a source. There are three ways:
-      - **Select file…** and pick what you downloaded: `.SchLib`, `.PcbLib`, `.LibPkg`, `.IntLib` or `.zip`. **Select folder…** also works. The app finds the source SchLib and PcbLib itself, and Altium extracts an IntLib first.
-      - **From Component Search Engine…** opens CSE's search for the MPN in your browser and watches your Downloads folder.
-        - **Sign in once** under **Settings → Component Search Engine…**: enter your CSE email and password, then click **Sign in & test**.
-          - **Remember login** stores the login encrypted for your Windows account (DPAPI) and restores it when the app starts.
-          - **Log out** deletes it.
-          - The login is sent only to componentsearchengine.com over HTTPS, never logged, and never stored in the project folder.
-        - On CSE, click the part's download button:
-          - If you get a small **Library Loader part file (`.epw`)**, the app **downloads the model itself** with your login. The status bar shows the progress.
-          - If you get a **full library zip**, it is used directly.
-        - The part is then imported automatically into your destination libraries. They are backed up first, the same duplicate check and validation as every other import apply, and existing parts are never overwritten.
+## 1. Download and start (2 minutes)
 
-        Click the button again to stop waiting. Settings also lets you choose the watched folder and turn automatic import off. The login status is shown next to the button.
-      - **From Mouser (ECAD model)…** opens Mouser's search for the MPN in your browser.
-        1. Open the part and click the **ECAD Model** icon; if Mouser asks, sign in with your Component Search Engine account.
-        2. Mouser saves the full SamacSys package (`LIB_<MPN>.zip`), which contains the Altium SchLib/PcbLib and a 3D STEP.
-        3. The app picks it up, imports it automatically and **attaches the STEP** as the footprint's 3D body. SamacSys ships the STEP separately; it is placed at the footprint origin, so check the 3D view.
+1. Go to the **[Releases page](https://github.com/Shihabul-glitch/Altium_Library_Mangement/releases/latest)** and download **`AltiumLibraryManager.exe`**.
+2. Put it anywhere, for example on your Desktop or in `Documents`, and **double-click it**. There is nothing to install.
+3. **The first time, Windows may show "Windows protected your PC".** The app is free and unsigned (a code-signing certificate costs money). Click **More info → Run anyway**. Windows remembers your choice.
+4. **Start Altium Designer.** The app works through Altium itself; if Altium isn't running when you import, the app offers to start it.
 
-        This uses no API: it is just your browser download.
-      - **From SamacSys library…** picks a part from the library the official **SamacSys Library Loader** adds parts to. Install the official loader from componentsearchengine.com and log in *in the loader*; this app never asks for your CSE password. With the loader running, download the part on Component Search Engine, then click the button. The first time, you select the SamacSys SchLib and PcbLib once.
-      - **LCSC # + Fetch from EasyEDA (unofficial)** downloads the part's EasyEDA data by LCSC number (e.g. `C2040`) and builds it in Altium into new staging libraries. It uses the EasyEDA-Importer code. The data comes from an undocumented EasyEDA API (community library), so check the footprint and pinout against the datasheet. `LCSC Part #` is filled in automatically.
-   2. **Component to import:** if the source library holds several symbols, pick one. The app pre-selects the one matching the MPN or LCSC number.
-   3. Select your **Destination SchLib** and **Destination PcbLib**. They are remembered.
-   4. Check the parameters. `LCSC Part #` is left blank unless you type it in (find the C-number with the LCSC button) or fetched the part by LCSC number.
-   5. Click **Import into Altium**. Altium must be running; if it isn't, the app starts it.
+> **Before you use your real libraries, try it on copies of them.** The app backs up your libraries before every import and never overwrites existing parts, but trying it on copies first is good practice.
 
-What the import does, all inside Altium through its scripting API:
-- Backs up both destination libraries to `%APPDATA%\AltiumLibraryManager\backups\<time>\`.
-- Copies the symbol, and the footprint(s) the symbol references, including the embedded 3D STEP body.
-- Links the symbol to the copied footprint. The library reference is set to your destination PcbLib's file name by default; full path and "any library" are also available.
-- Sets the parameters `Manufacturer`, `Manufacturer Part Number`, `Datasheet` and `LCSC Part #`, plus the component Description. A blank field leaves the library's own value unchanged.
-- Verifies the copy: pin and primitive counts must match the source, otherwise **nothing is saved**.
-- Checks every symbol pin designator against the footprint's pad designators. This is an automatic check only; you still need to check pin *functions* against the datasheet.
-- Saves, and reports everything in **Messages**.
-- Checks that Altium's own library search finds the new footprint, so it is ready to place without restarting Altium. Destination libraries you had open are closed during the import and reopened afterwards. (AD26 only refreshes its library search when a library that is *not* open in an editor is saved.) If a footprint is still reported "not found", the destination PcbLib is probably neither in an open project nor installed; the "Full library path" link mode works without either. Otherwise, restart Altium.
+## 2. One-time setup
 
-### Safety rules
-- An existing symbol or footprint is never overwritten. With **Skip**, a duplicate symbol is not imported, and a footprint whose name already exists is reused (with a warning to verify it). With **Import with new name**, the new copy gets a `_1` suffix.
-- If anything fails, nothing is saved and the libraries the job opened are closed without saving.
-- If a destination library is open in Altium **with unsaved changes**, the import refuses to run. Save or close the library first.
+| What | Where | Needed? |
+|---|---|---|
+| Your **destination libraries** (where parts go) | Step 3 → **Destination SchLib / Destination PcbLib → Select…** | **Yes**, once. The app remembers them. |
+| A **Component Search Engine** account (free) | Create one at [componentsearchengine.com](https://componentsearchengine.com/). Mouser asks for this account when you download an ECAD model. | For Mouser and CSE downloads |
+| Your own **Mouser API key** (free) | [Get a key](https://www.mouser.com/api-search/), then in the app: **Settings → API keys…** | Optional: only for the search table in step 1 and 2 |
+| CSE login inside the app | **Settings → Component Search Engine…** | Optional: see [Component Search Engine](#c-component-search-engine-cse) |
 
-## Data folder `%APPDATA%\AltiumLibraryManager\`
-`settings.json` · `credentials.json` (encrypted with Windows DPAPI) · `alm.db` (imported components and search log) · `alm.log` · `backups\` · `jobs\` (each import's job, script and result) · `extracted\` · `downloads\` (copies of finished CSE downloads) · `easyeda\` (EasyEDA downloads, `cache\` part files, `3D\` STEP models, `stage\` built staging libraries)
+Keys and logins are stored **encrypted for your Windows account** (Windows DPAPI). They are never stored in the app file or uploaded anywhere except to the service they belong to. Every user enters **their own** Mouser key; none is built in.
 
-## Contributing
-Changes are welcome: fork the repository, make the change, run the tests (below), and open a pull request. The design notes are in `architecture.md`. Altium-side code is plain DelphiScript in `alm/altium/*.pas`; keep changes small and test them on temporary libraries.
+## 3. Get a part: four ways
 
-## Credits
-The EasyEDA converter (`alm/easyeda/convert.py`) and the part builder (`alm/altium/ee_build.pas`) come from **EasyEDA-Importer** (github.com/hiteshwar/EasyEDA-Importer), by the same author, and are included under this project's licence.
+Enter the MPN in **1. Part number** first. Most buttons use it.
 
-## Licence
-[MIT](LICENSE): free to use, copy, modify and redistribute, including commercially; keep the licence notice. There is no warranty, so always verify footprints and pinouts against the datasheet.
+### A. Mouser (recommended, easiest)
+1. In **3. Import into Altium**, click **From Mouser (ECAD model)…**. Mouser opens in your browser with the part.
+2. On the part page, click the **ECAD Model** icon (symbol, footprint and 3D). If asked, sign in with your Component Search Engine account.
+3. Your browser saves `LIB_<part>.zip`. The app notices it, shows the download progress, and **imports the part automatically**: symbol, footprint and 3D model.
 
-Not affiliated with Altium, Mouser, SamacSys/Supplyframe, EasyEDA, LCSC or JLCPCB. Library data from those sites is subject to their own terms.
+### B. A library you downloaded yourself
+From Ultra Librarian, SnapMagic, Component Search Engine, or a manufacturer website: click **Select file…** and pick the `.zip`, `.IntLib`, `.LibPkg`, `.SchLib` or `.PcbLib`. You can also click **Select folder…**. The app finds the symbol and footprint libraries inside. Then click **Import into Altium**.
 
-## Tests
-`python -m unittest discover -s tests -v` runs offline and does not need Altium.
+The **Find a library** buttons on the right open each site's search for your MPN, or **Open ALL sites** opens them all.
 
-## Documents
-`requirement.md` · `architecture.md` · `roadmap.md` · `progress.md`
+### C. Component Search Engine (CSE)
+1. Click **From Component Search Engine (CSE)…**. CSE opens in your browser.
+2. Click the part's download button.
+   - If you get a full library zip, it is imported directly.
+   - If you get a small Library Loader file (`.epw`), the app downloads the model itself with your CSE login. Set the login up once in **Settings → Component Search Engine…**: enter your email and password, tick **Remember login**, then click **Sign in & test**. **Log out** deletes the saved login.
+
+### D. LCSC / JLCPCB parts via EasyEDA
+Type the LCSC number (for example `C2040`) in **EasyEDA by LCSC #** and click **Fetch**. The app downloads the EasyEDA data and builds the part in Altium, then you click **Import into Altium**. `LCSC Part #` is filled in automatically.
+
+*EasyEDA data is community-made and comes from an undocumented EasyEDA service, so always check the pinout and footprint.*
+
+## 4. What happens when you import
+
+- **Backup:** both destination libraries are copied to `%APPDATA%\AltiumLibraryManager\backups\` first.
+- **Copy:** the symbol and its footprint are copied into your libraries, and the footprint is **linked** to the symbol.
+- **3D:** the 3D model is attached when the download has one but the footprint doesn't, as with Mouser and SamacSys parts.
+- **Parameters:** `Manufacturer`, `Manufacturer Part Number`, `Datasheet`, `LCSC Part #` and Description are set. An empty field leaves the library's own value alone.
+- **Checks:** pin and footprint counts must match, otherwise **nothing is saved**. Every pin number must have a matching pad; this is an automatic check only, so still compare pin functions with the datasheet.
+- **Ready to place:** the app confirms Altium can find the new footprint immediately, with no restart. Libraries you had open in Altium are closed during the import and reopened afterwards.
+
+**Duplicates:** with **Skip (never overwrite)**, a part that already exists is left alone. With **Import with new name (_1)**, the new copy gets a suffix. Existing parts are never replaced or deleted.
+
+Everything is reported in **Messages**: green is OK, orange is a warning, red is an error.
+
+## 5. Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| "Windows protected your PC" | Click **More info → Run anyway** (see above). |
+| Antivirus warns about the .exe | One-file Python apps sometimes trigger false alarms. You can check the source code here, or [run from source](#run-from-source-for-developers) instead. |
+| "A destination library is open in Altium with unsaved changes" | Save or close that library in Altium, then import again. |
+| "No answer from Altium" | Make sure Altium is running and no dialog is waiting in Altium, then retry. |
+| Footprint "not found" when placing | The destination PcbLib must be in your open project or installed in Altium. Alternatively, choose **Footprint link: Full library path** before importing. |
+| Mouser/CSE download is not picked up | The app watches your normal Downloads folder. If your browser saves somewhere else, set that folder in **Settings → Component Search Engine…**. |
+| CSE keeps showing its login page | Sign out and in again on componentsearchengine.com, or use the **Mouser** button, which gives the same files. |
+| Mouser search says "Not configured" | Add your own Mouser API key in **Settings → API keys…**. The import works without a key. |
+| The 3D model sits in the wrong place | Open the footprint in Altium, press **3**, and move or rotate the 3D body. Downloaded models are placed at the footprint origin. |
+
+Your data lives in `%APPDATA%\AltiumLibraryManager\` (settings, encrypted logins, backups, log file `alm.log`). Open it with **Settings → Open data folder**. To uninstall, delete the `.exe` and that folder.
+
+## Run from source (for developers)
+
+- **Requirements:** Windows, Python 3.10+ from [python.org](https://www.python.org/downloads/). No `pip install` is needed to run.
+- **Start:** double-click `Altium Library Manager.bat`, or run `python -m alm`.
+- **Tests:** `python -m unittest discover -s tests -v` (offline; Altium is not needed).
+- **Build the .exe:** `pip install pyinstaller pillow`, then `python tools/build_exe.py`. The result is `dist/AltiumLibraryManager.exe`. `tools/make_icon.py` draws the icon.
+- **Design notes:** `architecture.md`, `progress.md`, `requirement.md`, `roadmap.md`. Altium-side code is DelphiScript in `alm/altium/*.pas`; test changes on temporary libraries.
+
+Contributions are welcome: fork, change, run the tests, and open a pull request.
+
+## Credits and licence
+
+- The EasyEDA converter (`alm/easyeda/convert.py`) and part builder (`alm/altium/ee_build.pas`) come from [EasyEDA-Importer](https://github.com/hiteshwar/EasyEDA-Importer), by the same author.
+- Licensed under [MIT](LICENSE): free to use, copy, modify and share, including commercially; keep the licence notice. **No warranty.** Always check footprints and pinouts against the datasheet before ordering PCBs.
+- Not affiliated with Altium, Mouser, SamacSys/Supplyframe (Component Search Engine), EasyEDA, LCSC or JLCPCB. Library data from those sites is subject to their own terms.
