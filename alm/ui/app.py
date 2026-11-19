@@ -1,0 +1,648 @@
+"""Tkinter user interface.
+
+Workflow: paste MPN -> Search -> open library sites -> download manually ->
+select the downloaded library -> select destination SchLib/PcbLib -> Import into Altium.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import queue
+import threading
+import tkinter as tk
+import webbrowser
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+from .. import __version__
+from ..altium import bridge
+from ..config import Settings, app_dir
+from ..credentials import CredentialStore
+from ..db import Database
+from ..importer import ImportRequest, record_import, run_import, validate
+from ..models import ProviderState
+from ..providers.links import ALTIUM_MPS_HELP, MANUAL_SOURCES
+from ..providers.mouser import CRED_NAME as MOUSER_CRED
+from ..search import SearchOutcome, run_search
+from ..easyeda.fetch import UNOFFICIAL_NOTE, clean_lcsc, fetch_and_build
+from ..schlib_reader import best_match, list_symbols
+from ..sources import resolve_source
+from ..validation import check_library
+
+ALL_COMPONENTS = "(all components)"
+
+log = logging.getLogger(__name__)
+
+RESULT_COLUMNS = [  # id, heading, width
+    ("match", "Match", 135), ("mpn", "MPN", 170), ("mfr", "Manufacturer", 150),
+    ("source", "Source", 70), ("symbol", "Symbol", 55), ("footprint", "Footprint", 65),
+    ("model3d", "3D", 40), ("datasheet", "Datasheet", 65), ("supplier_pn", "Supplier P/N", 130),
+]
+PARAM_FIELDS = ["Manufacturer", "Manufacturer Part Number", "Description", "Datasheet", "LCSC Part #"]
+LINK_MODES = {"Library file name (recommended)": "name", "Full library path": "path",
+              "Any library": "any"}
+DOWNLOAD_TYPES = [("Altium libraries / packages", "*.SchLib *.PcbLib *.IntLib *.LibPkg *.zip"),
+                  ("All files", "*.*")]
+
+
+class App:
+    def __init__(self, root: tk.Tk, settings: Settings, creds: CredentialStore, db: Database,
+                 providers: list):
+        self.root, self.settings, self.creds, self.db, self.providers = (
+            root, settings, creds, db, providers)
+        self.outcome: SearchOutcome | None = None
+        self.work_dir = app_dir()
+        self._queue: queue.Queue = queue.Queue()
+        self._busy = False
+        self._build()
+
+    # ================= layout =================
+    def _build(self) -> None:
+        r = self.root
+        r.title(f"Altium Library Manager {__version__}")
+        r.geometry("1180x880")
+        r.minsize(980, 760)
+
+        menubar = tk.Menu(r)
+        m = tk.Menu(menubar, tearoff=False)
+        m.add_command(label="API keys...", command=self._api_keys_dialog)
+        m.add_command(label="Open data folder (backups, logs)",
+                      command=lambda: os.startfile(self.work_dir))
+        menubar.add_cascade(label="Settings", menu=m)
+        r.config(menu=menubar)
+
+        # ---- 1. Search ----
+        top = ttk.LabelFrame(r, text="1. Part number", padding=6)
+        top.pack(fill="x", padx=8, pady=(8, 4))
+        self.mpn_var = tk.StringVar(value=self.settings.get("last_mpn", ""))
+        entry = ttk.Entry(top, textvariable=self.mpn_var, width=40, font=("Segoe UI", 11))
+        entry.pack(side="left")
+        entry.bind("<Return>", lambda e: self.on_search())
+        entry.focus_set()
+        self.search_btn = ttk.Button(top, text="Search", command=self.on_search)
+        self.search_btn.pack(side="left", padx=6)
+        self.search_info = ttk.Label(top, text="", foreground="#555")
+        self.search_info.pack(side="left", padx=6)
+
+        # ---- 2. Results + library sites ----
+        mid = ttk.Frame(r)
+        mid.pack(fill="both", expand=True, padx=8)
+        res = ttk.LabelFrame(mid, text="2. Search results (double-click opens the source page)",
+                             padding=6)
+        res.pack(side="left", fill="both", expand=True)
+        self.tree = ttk.Treeview(res, columns=[c[0] for c in RESULT_COLUMNS], show="headings",
+                                 height=4, selectmode="browse")
+        for cid, head, width in RESULT_COLUMNS:
+            self.tree.heading(cid, text=head)
+            self.tree.column(cid, width=width, stretch=cid in ("mfr", "mpn"))
+        self.tree.tag_configure("exact", background="#e3f6e3")
+        self.tree.tag_configure("similar", background="#fff1d6")
+        self.tree.pack(fill="both", expand=True)
+        self.tree.bind("<Double-1>", lambda e: self._open_selected("source_url"))
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._use_selected_result())
+        rb = ttk.Frame(res)
+        rb.pack(fill="x", pady=(4, 0))
+        ttk.Button(rb, text="Open source page",
+                   command=lambda: self._open_selected("source_url")).pack(side="left")
+        ttk.Button(rb, text="Open datasheet",
+                   command=lambda: self._open_selected("datasheet_url")).pack(side="left", padx=4)
+
+        sites = ttk.LabelFrame(mid, text="Find a library (opens the site's search page)", padding=6)
+        sites.pack(side="left", fill="y", padx=(8, 0))
+        for src in MANUAL_SOURCES:
+            ttk.Button(sites, text=src.name, width=26,
+                       command=lambda s=src: self._open_site(s)).pack(fill="x", pady=1)
+        ttk.Button(sites, text="Altium Manufacturer Part Search",
+                   command=self._altium_mps).pack(fill="x", pady=1)
+        ttk.Button(sites, text="Open ALL sites", command=self._open_all_sites).pack(fill="x",
+                                                                                   pady=(6, 0))
+
+        # ---- 3. Import ----
+        imp = ttk.LabelFrame(r, text="3. Import into Altium", padding=6)
+        imp.pack(fill="x", padx=8, pady=4)
+        imp.columnconfigure(1, weight=1)
+        ttk.Label(imp, text="Downloaded library:").grid(row=0, column=0, sticky="w")
+        bf = ttk.Frame(imp)
+        bf.grid(row=0, column=1, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Button(bf, text="Select file (SchLib / PcbLib / IntLib / LibPkg / zip)...",
+                   command=self._pick_download_file).pack(side="left")
+        ttk.Button(bf, text="Select folder...", command=self._pick_download_folder).pack(
+            side="left", padx=4)
+        ttk.Button(bf, text="From SamacSys library...", command=self._from_samacsys).pack(
+            side="left", padx=(12, 4))
+        ttk.Label(bf, text="   or LCSC #:").pack(side="left")
+        self.lcsc_var = tk.StringVar()
+        lcsc_entry = ttk.Entry(bf, textvariable=self.lcsc_var, width=12)
+        lcsc_entry.pack(side="left", padx=4)
+        lcsc_entry.bind("<Return>", lambda e: self._fetch_lcsc())
+        self.lcsc_btn = ttk.Button(bf, text="Fetch from EasyEDA (unofficial)",
+                                   command=self._fetch_lcsc)
+        self.lcsc_btn.pack(side="left")
+
+        self.src_sch = tk.StringVar()
+        self.src_pcb = tk.StringVar()
+        self.dst_sch = tk.StringVar(value=self.settings.get("schlib", ""))
+        self.dst_pcb = tk.StringVar(value=self.settings.get("pcblib", ""))
+        self.comp_var = tk.StringVar()
+        rows = [(1, "Source SchLib:", self.src_sch, ".SchLib", None),
+                (2, "Source PcbLib:", self.src_pcb, ".PcbLib", None),
+                (4, "Destination SchLib:", self.dst_sch, ".SchLib", "schlib"),
+                (5, "Destination PcbLib:", self.dst_pcb, ".PcbLib", "pcblib")]
+        for i, label, var, ext, key in rows:
+            ttk.Label(imp, text=label).grid(row=i, column=0, sticky="w")
+            ttk.Entry(imp, textvariable=var, state="readonly").grid(row=i, column=1, sticky="ew",
+                                                                   padx=4, pady=1)
+            ttk.Button(imp, text="Select...",
+                       command=lambda v=var, x=ext, k=key: self._pick_lib(v, x, k)).grid(
+                row=i, column=2)
+        ttk.Label(imp, text="Component to import:").grid(row=3, column=0, sticky="w")
+        self.comp_box = ttk.Combobox(imp, textvariable=self.comp_var, state="readonly")
+        self.comp_box.grid(row=3, column=1, sticky="ew", padx=4, pady=1)
+        self.src_sch.trace_add("write", lambda *a: self._refresh_components())
+
+        pf = ttk.LabelFrame(imp, text="Component parameters (blank = keep library value; "
+                                      "'LCSC Part #' is always created)", padding=4)
+        pf.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.param_vars: dict[str, tk.StringVar] = {}
+        for i, name in enumerate(PARAM_FIELDS):
+            var = tk.StringVar()
+            self.param_vars[name] = var
+            ttk.Label(pf, text=name + ":").grid(row=i // 2, column=(i % 2) * 2, sticky="w",
+                                                padx=(0 if i % 2 == 0 else 12, 2))
+            ttk.Entry(pf, textvariable=var, width=52).grid(row=i // 2, column=(i % 2) * 2 + 1,
+                                                          sticky="ew", pady=1)
+        pf.columnconfigure(1, weight=1)
+        pf.columnconfigure(3, weight=1)
+
+        of = ttk.Frame(imp)
+        of.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        ttk.Label(of, text="If the name already exists:").pack(side="left")
+        self.conflict_var = tk.StringVar(value=self.settings.get("on_conflict", "skip"))
+        ttk.Radiobutton(of, text="Skip (never overwrite)", value="skip",
+                        variable=self.conflict_var).pack(side="left", padx=4)
+        ttk.Radiobutton(of, text="Import with new name (_1)", value="rename",
+                        variable=self.conflict_var).pack(side="left", padx=4)
+        ttk.Label(of, text="   Footprint link:").pack(side="left")
+        current = self.settings.get("link_mode", "name")
+        self.link_var = tk.StringVar(value=next(
+            (k for k, v in LINK_MODES.items() if v == current), list(LINK_MODES)[0]))
+        ttk.Combobox(of, textvariable=self.link_var, values=list(LINK_MODES), state="readonly",
+                     width=30).pack(side="left", padx=4)
+        self.import_btn = ttk.Button(of, text="Import into Altium", command=self.on_import)
+        self.import_btn.pack(side="right")
+
+        # ---- Messages ----
+        msg = ttk.LabelFrame(r, text="Messages", padding=4)
+        msg.pack(fill="both", padx=8, pady=(0, 4))
+        self.info = tk.Text(msg, height=9, wrap="word", font=("Segoe UI", 9))
+        sb = ttk.Scrollbar(msg, orient="vertical", command=self.info.yview)
+        self.info.configure(yscrollcommand=sb.set)
+        self.info.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.info.tag_configure("bold", font=("Segoe UI", 9, "bold"))
+        self.info.tag_configure("warn", foreground="#a05a00")
+        self.info.tag_configure("err", foreground="#b00020")
+        self.info.tag_configure("ok", foreground="#1b7a1b")
+        self._set_info([("Paste an MPN and press Search, or go straight to step 3 with a library "
+                         "you already downloaded.", "")])
+
+        self.status_var = tk.StringVar(value="Ready.")
+        ttk.Label(r, textvariable=self.status_var, relief="sunken", anchor="w",
+                  padding=(6, 2)).pack(fill="x", side="bottom")
+
+    # ================= background tasks =================
+    def _run_bg(self, label: str, func, on_done) -> None:
+        if self._busy:
+            self.status_var.set("Busy - please wait for the current task to finish.")
+            return
+        self._busy = True
+        for b in (self.search_btn, self.import_btn, self.lcsc_btn):
+            b.state(["disabled"])
+        self.status_var.set(label)
+
+        def worker():
+            try:
+                self._queue.put((func(), None))
+            except Exception as e:
+                log.exception("Background task failed")
+                self._queue.put((None, e))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.root.after(200, lambda: self._poll(on_done))
+
+    def _poll(self, on_done) -> None:
+        try:
+            value, err = self._queue.get_nowait()
+        except queue.Empty:
+            self.root.after(200, lambda: self._poll(on_done))
+            return
+        self._busy = False
+        for b in (self.search_btn, self.import_btn, self.lcsc_btn):
+            b.state(["!disabled"])
+        if err is not None:
+            self.status_var.set(f"Failed: {err}")
+            self._set_info([(f"Failed: {err}", "err")])
+            return
+        on_done(value)
+
+    # ================= search =================
+    def on_search(self) -> None:
+        mpn = self.mpn_var.get().strip()
+        if not mpn:
+            self.status_var.set("Enter a manufacturer part number.")
+            return
+        self.settings.set("last_mpn", mpn)
+        self._run_bg(f"Searching '{mpn}'...",
+                     lambda: run_search(mpn, self.providers, MANUAL_SOURCES), self._show_outcome)
+
+    def _show_outcome(self, o: SearchOutcome) -> None:
+        self.outcome = o
+        self.tree.delete(*self.tree.get_children())
+        for i, res in enumerate(o.results):
+            self.tree.insert("", "end", iid=str(i),
+                             tags=("exact" if res.match.name == "EXACT" else "similar",),
+                             values=(res.match.value, res.mpn, res.manufacturer, res.source,
+                                     res.symbol.value, res.footprint.value, res.model3d.value,
+                                     "Yes" if res.datasheet_url else "-", res.supplier_pn))
+        api = [s for s in o.statuses if s.state is not ProviderState.MANUAL]
+        self.search_info.configure(text="  ".join(
+            f"{s.provider}: {s.state.value}" + (f" ({s.count})" if s.state is ProviderState.OK
+                                                else (f" - {s.message}" if s.message else ""))
+            for s in api) + "   | Library sites: not searched, use the buttons")
+        self._fill_params(o)
+        lines = [(o.recommendation + "\n", "bold")]
+        try:
+            for c in self.db.find_component(o.query):
+                lines.append((f"ALREADY IMPORTED: {c['mpn']} -> {c['dest_schlib']} / "
+                               f"{c['dest_pcblib']} (footprint {c['footprint_name']}, "
+                               f"{c['import_date']}, {c['verification']})\n", "warn"))
+            self.db.log_search(o.query, {s.provider: s.state.value for s in o.statuses},
+                               o.exact_count)
+        except Exception:
+            log.exception("Database access failed")
+        for w in o.warnings:
+            lines.append(("Warning: " + w + "\n", "warn"))
+        self._set_info(lines)
+        self.status_var.set(f"{len(o.results)} result(s), {o.exact_count} exact.")
+
+    def _fill_params(self, o: SearchOutcome) -> None:
+        best = o.best
+        values = {"Manufacturer": best.manufacturer if best else "",
+                  "Manufacturer Part Number": best.mpn if best else o.query,
+                  "Description": best.description if best else "",
+                  "Datasheet": best.datasheet_url if best else "",
+                  "LCSC Part #": best.lcsc if best else ""}   # lcsc only if verified (never guessed)
+        for k, v in values.items():
+            self.param_vars[k].set(v)
+
+    def _use_selected_result(self) -> None:
+        res = self._selected_result()
+        if not res:
+            return
+        if res.match.name != "EXACT":
+            self.status_var.set("Selected row is NOT an exact match - parameters not changed.")
+            return
+        self.param_vars["Manufacturer"].set(res.manufacturer)
+        self.param_vars["Manufacturer Part Number"].set(res.mpn)
+        self.param_vars["Description"].set(res.description)
+        self.param_vars["Datasheet"].set(res.datasheet_url)
+        self.status_var.set(f"Parameters filled from {res.source} result.")
+
+    # ================= sites =================
+    def _current_mpn(self) -> str | None:
+        mpn = self.mpn_var.get().strip()
+        if not mpn:
+            self.status_var.set("Enter an MPN first.")
+            return None
+        return mpn
+
+    def _open_site(self, src) -> None:
+        mpn = self._current_mpn()
+        if mpn:
+            webbrowser.open(src.url(mpn))
+
+    def _open_all_sites(self) -> None:
+        mpn = self._current_mpn()
+        if mpn:
+            for src in MANUAL_SOURCES:
+                webbrowser.open(src.url(mpn))
+
+    def _altium_mps(self) -> None:
+        mpn = self._current_mpn()
+        if mpn:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(mpn)
+            messagebox.showinfo("Altium Manufacturer Part Search", ALTIUM_MPS_HELP, parent=self.root)
+
+    def _selected_result(self):
+        sel = self.tree.selection()
+        if not sel or not self.outcome:
+            return None
+        return self.outcome.results[int(sel[0])]
+
+    def _open_selected(self, attr: str) -> None:
+        res = self._selected_result()
+        url = getattr(res, attr, "") if res else ""
+        if url.startswith(("https://", "http://")):
+            webbrowser.open(url)
+        else:
+            self.status_var.set("No link available for the selected row.")
+
+    # ================= source / destination selection =================
+    def _pick_download_file(self) -> None:
+        path = filedialog.askopenfilename(parent=self.root, title="Select the downloaded library",
+                                          initialdir=self.settings.get("last_download_dir") or None,
+                                          filetypes=DOWNLOAD_TYPES)
+        if path:
+            self._load_download(Path(path))
+
+    def _pick_download_folder(self) -> None:
+        path = filedialog.askdirectory(parent=self.root, title="Select the downloaded folder",
+                                       initialdir=self.settings.get("last_download_dir") or None)
+        if path:
+            self._load_download(Path(path))
+
+    def _load_download(self, path: Path) -> None:
+        self.settings.set("last_download_dir", str(path if path.is_dir() else path.parent))
+        try:
+            pkg = resolve_source(path, self.work_dir / "extracted")
+        except Exception as e:
+            log.exception("Resolving source failed")
+            messagebox.showerror("Cannot read download", str(e), parent=self.root)
+            return
+        if pkg.intlib and not (pkg.schlib and pkg.pcblib):
+            self._extract_intlib(pkg.intlib)
+            return
+        self._apply_package(pkg)
+
+    def _apply_package(self, pkg) -> None:
+        self.src_sch.set(str(pkg.schlib) if pkg.schlib else "")
+        self.src_pcb.set(str(pkg.pcblib) if pkg.pcblib else "")
+        lines = [("Downloaded library loaded:\n", "bold"),
+                 (f"  Symbol library:    {pkg.schlib or 'NOT FOUND'}\n", "" if pkg.schlib else "err"),
+                 (f"  Footprint library: {pkg.pcblib or 'NOT FOUND'}\n", "" if pkg.pcblib else "err")]
+        if pkg.step_files:
+            lines.append((f"  STEP files in package: {', '.join(p.name for p in pkg.step_files)} "
+                          "(the footprint's embedded 3D body is what gets imported)\n", ""))
+        for n in pkg.notes:
+            lines.append(("  Note: " + n + "\n", "warn"))
+        self._set_info(lines)
+
+    def _extract_intlib(self, intlib: Path) -> None:
+        x2 = self._x2()
+        if not x2:
+            return
+        out = bridge.new_job_dir(self.work_dir / "extracted")
+
+        def task():
+            rep = bridge.extract_intlib(x2, intlib, out, self.work_dir)
+            if not rep.ok:
+                raise RuntimeError("IntLib extraction failed: " + "; ".join(rep.errors))
+            return resolve_source(out, self.work_dir / "extracted")
+
+        self._run_bg("Extracting IntLib sources in Altium...", task, self._apply_package)
+
+    def _pick_lib(self, var: tk.StringVar, ext: str, key: str | None) -> None:
+        initial = os.path.dirname(var.get()) if var.get() else (
+            self.settings.get("last_download_dir") if key is None else None)
+        path = filedialog.askopenfilename(
+            parent=self.root, title=f"Select {ext}", initialdir=initial or None,
+            filetypes=[(f"Altium library (*{ext})", f"*{ext}"), ("All files", "*.*")])
+        if not path:
+            return
+        path = os.path.normpath(path)
+        err = check_library(path, ext)
+        if err:
+            messagebox.showerror("Invalid library", err, parent=self.root)
+            return
+        var.set(path)
+        if key:
+            self.settings.set(key, path)
+
+    # ================= component choice (multi-part source libraries) =================
+    def _refresh_components(self, prefer: str = "") -> None:
+        names: list[str] = []
+        path = self.src_sch.get()
+        if path and os.path.isfile(path):
+            try:
+                names = [s.name for s in list_symbols(path)]
+            except Exception:
+                log.exception("Listing symbols failed")
+        self.comp_box["values"] = names + ([ALL_COMPONENTS] if len(names) > 1 else [])
+        pick = prefer if prefer in names else best_match(
+            names, self.param_vars["Manufacturer Part Number"].get(), self.mpn_var.get(),
+            self.param_vars["LCSC Part #"].get(), self.lcsc_var.get())
+        if not pick and len(names) == 1:
+            pick = names[0]
+        self.comp_var.set(pick)
+        if len(names) > 1 and not pick:
+            self.status_var.set(f"The source library has {len(names)} symbols - choose the "
+                                "component to import.")
+
+    # ================= SamacSys Library Loader library =================
+    def _from_samacsys(self) -> None:
+        sch, pcb = self.settings.get("samacsys_schlib", ""), self.settings.get("samacsys_pcblib", "")
+        if not (sch and os.path.isfile(sch) and pcb and os.path.isfile(pcb)):
+            messagebox.showinfo(
+                "SamacSys library", "Select the SchLib and PcbLib that the official SamacSys "
+                "Library Loader adds parts to (see Library Loader settings). This is asked once.",
+                parent=self.root)
+            sch = filedialog.askopenfilename(parent=self.root, title="SamacSys symbol library",
+                                             filetypes=[("Altium SchLib", "*.SchLib")])
+            if not sch:
+                return
+            guess = os.path.splitext(sch)[0] + ".PcbLib"
+            pcb = guess if os.path.isfile(guess) else filedialog.askopenfilename(
+                parent=self.root, title="SamacSys footprint library",
+                filetypes=[("Altium PcbLib", "*.PcbLib")])
+            if not pcb:
+                return
+            sch, pcb = os.path.normpath(sch), os.path.normpath(pcb)
+            for p, ext in ((sch, ".SchLib"), (pcb, ".PcbLib")):
+                err = check_library(p, ext)
+                if err:
+                    messagebox.showerror("Invalid library", err, parent=self.root)
+                    return
+            self.settings.set("samacsys_schlib", sch)
+            self.settings.set("samacsys_pcblib", pcb)
+        self.src_pcb.set(pcb)
+        self.src_sch.set(sch)          # triggers the component list (picks the MPN if present)
+        found = self.comp_var.get()
+        self._set_info([("Source: SamacSys library\n", "bold"), (f"  {sch}\n  {pcb}\n", ""),
+                        (f"  Component: {found}\n" if found else
+                         "  The MPN was not found in this library - download it on Component "
+                         "Search Engine with the Library Loader running, then click the button "
+                         "again, or choose a component.\n", "" if found else "warn")])
+
+    # ================= EasyEDA (LCSC number) =================
+    def _fetch_lcsc(self) -> None:
+        lcsc = clean_lcsc(self.lcsc_var.get() or self.param_vars["LCSC Part #"].get())
+        if not lcsc:
+            messagebox.showerror("LCSC number", "Enter an LCSC part number, e.g. C2040.",
+                                 parent=self.root)
+            return
+        self.lcsc_var.set(lcsc)
+        x2 = self._x2()
+        if not x2:
+            return
+        if not bridge.is_altium_running() and not messagebox.askokcancel(
+                "Altium is not running", "Altium Designer will be started to build the part.",
+                parent=self.root):
+            return
+        self._run_bg(f"Fetching {lcsc} from EasyEDA and building it in Altium...",
+                     lambda: fetch_and_build(lcsc, self.work_dir / "easyeda", x2, self.work_dir),
+                     self._staged_done)
+
+    def _staged_done(self, st) -> None:
+        lines = [(f"EasyEDA part {st.lcsc}: ", "bold"), (UNOFFICIAL_NOTE + "\n", "warn")]
+        lines += [("  Converter: " + w + "\n", "warn") for w in st.part.warnings]
+        lines += [("  Builder: " + w + "\n", "warn") for w in st.build.warnings]
+        if st.problems:
+            lines += [("ERROR: " + p + "\n", "err") for p in st.problems]
+            self._set_info(lines)
+            self.status_var.set("EasyEDA part could not be built (see Messages).")
+            return
+        # Fill blank fields only. LCSC Part # is set: the part was fetched by that number.
+        self.param_vars["LCSC Part #"].set(st.lcsc)
+        fill = {"Manufacturer": st.part.params.get("Manufacturer", ""),
+                "Manufacturer Part Number": st.part.params.get("Manufacturer Part", ""),
+                "Description": st.part.meta.get("DESC", "")}
+        for k, v in fill.items():
+            if v and not self.param_vars[k].get().strip():
+                self.param_vars[k].set(v)
+        self.src_pcb.set(str(st.pcblib))
+        self.src_sch.set(str(st.schlib))
+        self._refresh_components(prefer=st.build.symbol)
+        lines += [(f"  Built symbol {st.build.symbol} ({st.part.pins} pins) and footprint "
+                   f"{st.build.footprint} ({st.build.pads} pads, {st.build.primitives} objects) "
+                   "in staging libraries.\n", "ok"),
+                  ("  Choose the destination and click Import into Altium.\n", "bold")]
+        self._set_info(lines)
+        self.status_var.set(f"{st.lcsc} ready to import.")
+
+    # ================= import =================
+    def _x2(self) -> Path | None:
+        x2 = bridge.find_x2(self.settings.get("x2_path", ""))
+        if not x2:
+            messagebox.showerror("Altium not found",
+                                 "Altium Designer (X2.EXE) was not found. Set \"x2_path\" in "
+                                 "settings.json in the data folder.", parent=self.root)
+        return x2
+
+    def on_import(self) -> None:
+        params = {k: v.get().strip() for k, v in self.param_vars.items()}
+        req = ImportRequest(
+            src_schlib=self.src_sch.get(), src_pcblib=self.src_pcb.get(),
+            dest_schlib=self.dst_sch.get(), dest_pcblib=self.dst_pcb.get(),
+            params={k: v for k, v in params.items() if k != "Description"},
+            description=params["Description"], on_conflict=self.conflict_var.get(),
+            link_mode=LINK_MODES.get(self.link_var.get(), "name"),
+            source_label=Path(self.src_sch.get()).parent.name if self.src_sch.get() else "",
+            component="" if self.comp_var.get() == ALL_COMPONENTS else self.comp_var.get())
+        if not req.component and len(self.comp_box["values"]) > 1 \
+                and self.comp_var.get() != ALL_COMPONENTS:
+            messagebox.showerror("Cannot import", "Choose the component to import (the source "
+                                 "library contains several).", parent=self.root)
+            return
+        self.settings.set("on_conflict", req.on_conflict)
+        self.settings.set("link_mode", req.link_mode)
+        errors = validate(req)
+        if errors:
+            messagebox.showerror("Cannot import", "\n".join(errors), parent=self.root)
+            return
+        x2 = self._x2()
+        if not x2:
+            return
+        timeout = 240
+        if not bridge.is_altium_running():
+            if not messagebox.askokcancel(
+                    "Altium is not running",
+                    "Altium Designer will be started to run the import. This can take a minute.",
+                    parent=self.root):
+                return
+            timeout = 420
+        if not messagebox.askokcancel(
+                "Confirm import",
+                f"Import from:\n  {req.src_schlib}\n  {req.src_pcblib}\n\ninto:\n  {req.dest_schlib}\n"
+                f"  {req.dest_pcblib}\n\nBoth destination libraries are backed up first. Existing "
+                f"components are never overwritten.", parent=self.root):
+            return
+        self._pending_req = req
+        self._run_bg("Importing in Altium... (watch Altium for any dialog)",
+                     lambda: run_import(req, x2, self.work_dir, timeout), self._show_report)
+
+    def _show_report(self, report) -> None:
+        req = self._pending_req
+        try:
+            record_import(self.db, req, report)
+        except Exception:
+            log.exception("Recording import failed")
+        lines = []
+        for line in report.summary().splitlines():
+            tag = ("err" if line.startswith(("ERROR", "Result: FAILED", "PIN/PAD", "PIN CHECK"))
+                   else "warn" if line.startswith(("Warning", "NOTE")) else
+                   "ok" if line.startswith(("Result: SUCCESS", "Added", "Linked",
+                                            "Altium library search finds")) else "")
+            lines.append((line + "\n", tag))
+        self._set_info(lines)
+        log.info("Import report:\n%s", report.summary())
+        if report.ok and report.added_symbols:
+            self.status_var.set("Import finished - the component is ready to place in Altium.")
+            messagebox.showinfo("Import finished",
+                                "Added: " + ", ".join(report.added_symbols) +
+                                "\n\nSee Messages for the verification details.", parent=self.root)
+        elif report.ok:
+            self.status_var.set("Nothing imported (see Messages).")
+        else:
+            self.status_var.set("Import FAILED - nothing was saved (see Messages).")
+            messagebox.showerror("Import failed", "\n".join(report.errors) or "See Messages.",
+                                 parent=self.root)
+
+    # ================= misc =================
+    def _set_info(self, parts: list[tuple[str, str]]) -> None:
+        self.info.configure(state="normal")
+        self.info.delete("1.0", "end")
+        for text, tag in parts:
+            self.info.insert("end", text, tag)
+        self.info.configure(state="disabled")
+
+    def _api_keys_dialog(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("API keys")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        frm = ttk.Frame(dlg, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Mouser Search API key:").grid(row=0, column=0, sticky="w")
+        var = tk.StringVar(value=self.creds.get(MOUSER_CRED))
+        ttk.Entry(frm, textvariable=var, width=48, show="*").grid(row=0, column=1, padx=4)
+        ttk.Button(frm, text="Get a key",
+                   command=lambda: webbrowser.open("https://www.mouser.com/api-search/")).grid(
+            row=0, column=2)
+        ttk.Label(frm, foreground="#555", text=(
+            "Stored encrypted for your Windows account (DPAPI). Leave blank and save to remove.\n"
+            f"The environment variable {CredentialStore.env_name(MOUSER_CRED)} overrides it.")).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=6)
+
+        def save():
+            try:
+                self.creds.set(MOUSER_CRED, var.get())
+            except Exception as e:
+                log.exception("Saving credential failed")
+                messagebox.showerror("Error", f"Could not save key: {e}", parent=dlg)
+                return
+            self.status_var.set("API key saved.")
+            dlg.destroy()
+
+        ttk.Button(frm, text="Save", command=save).grid(row=2, column=2, sticky="e")
+
+
+def run_gui(settings: Settings, creds: CredentialStore, db: Database, providers: list) -> None:
+    root = tk.Tk()
+    try:
+        ttk.Style(root).theme_use("vista")
+    except tk.TclError:
+        pass
+    App(root, settings, creds, db, providers)
+    root.mainloop()

@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+# Altium leaves these next to libraries it opens
+History/
+__Previews/
+*.SchLibPreview
+*.PcbLibPreview
+# never commit local settings or keys (the app keeps them in %APPDATA%, not here)
+settings.json
+credentials.json
+*.db
