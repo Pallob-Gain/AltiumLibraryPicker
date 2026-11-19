@@ -87,8 +87,13 @@ class JobTests(TmpCase):
         self.assertEqual(v[f"Param{names.index('LCSC Part #') + 1}Value"], "")
 
     def test_job_values_component_and_keep_open(self):
-        v = job_values(ImportRequest("a", "b", "c", "d", component="U1"))
-        self.assertEqual((v["Component"], v["KeepOpen"]), ("U1", "1"))
+        v = job_values(ImportRequest("a", "b", "c", "d", component="U1", step_file="m.stp"))
+        self.assertEqual((v["Component"], v["KeepOpen"], v["StepFile"]), ("U1", "1", "m.stp"))
+
+    def test_added_3d_is_reported(self):
+        r = bridge.parse_result("STATUS=OK\nADDED_3D=FP1|part.stp\nEND=1")
+        self.assertEqual(r.added_3d, [("FP1", "part.stp")])
+        self.assertIn("Added 3D model: part.stp -> FP1", r.summary())
 
     def test_finish_values(self):
         req = ImportRequest("a", "b", "c.SchLib", "d.PcbLib")

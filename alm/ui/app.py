@@ -34,6 +34,15 @@ from ..sources import resolve_source
 from ..validation import check_library
 
 ALL_COMPONENTS = "(all components)"
+# browser sites whose ECAD download is picked up from the Downloads folder:
+# key -> (button text, what to click on the site)
+WATCH_SITES = {
+    "cse": ("From Component Search Engine...",
+            "Open the part and click its download button (ECAD model)."),
+    "mouser_web": ("From Mouser (ECAD model)...",
+                   "Open the part and click the ECAD Model icon (SamacSys symbol, footprint, 3D) "
+                   "- sign in with your Component Search Engine account if Mouser asks."),
+}
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +68,7 @@ class App:
         self._watcher: DownloadWatcher | None = None
         self._auto_import_next = False
         self._progress_text = ""
+        self._step_file = ""
         # CSE login: restored from the encrypted store ("Remember login"), or session-only
         self._cse_login = (creds.get(CRED_EMAIL), creds.get(CRED_PASSWORD))
         self._queue: queue.Queue = queue.Queue()
@@ -138,9 +148,13 @@ class App:
                    command=self._pick_download_file).pack(side="left")
         ttk.Button(bf, text="Select folder...", command=self._pick_download_folder).pack(
             side="left", padx=4)
-        self.cse_btn = ttk.Button(bf, text="From Component Search Engine...",
-                                  command=self._cse_toggle)
+        self.cse_btn = ttk.Button(bf, text=WATCH_SITES["cse"][0],
+                                  command=lambda: self._cse_toggle("cse"))
         self.cse_btn.pack(side="left", padx=(12, 2))
+        self.mouser_btn = ttk.Button(bf, text=WATCH_SITES["mouser_web"][0],
+                                     command=lambda: self._cse_toggle("mouser_web"))
+        self.mouser_btn.pack(side="left", padx=(0, 2))
+        self._site_btns = {"cse": self.cse_btn, "mouser_web": self.mouser_btn}
         self.cse_login_var = tk.StringVar()
         ttk.Label(bf, textvariable=self.cse_login_var, foreground="#555").pack(side="left",
                                                                                 padx=(0, 8))
@@ -402,12 +416,17 @@ class App:
     def _apply_package(self, pkg) -> None:
         self.src_sch.set(str(pkg.schlib) if pkg.schlib else "")
         self.src_pcb.set(str(pkg.pcblib) if pkg.pcblib else "")
+        # one STEP in the package (SamacSys/Mouser ship it separately): attached to imported
+        # footprints that have no 3D body of their own
+        self._step_file = str(pkg.step_files[0]) if len(pkg.step_files) == 1 else ""
         lines = [("Downloaded library loaded:\n", "bold"),
                  (f"  Symbol library:    {pkg.schlib or 'NOT FOUND'}\n", "" if pkg.schlib else "err"),
                  (f"  Footprint library: {pkg.pcblib or 'NOT FOUND'}\n", "" if pkg.pcblib else "err")]
         if pkg.step_files:
-            lines.append((f"  STEP files in package: {', '.join(p.name for p in pkg.step_files)} "
-                          "(the footprint's embedded 3D body is what gets imported)\n", ""))
+            lines.append((f"  STEP files in package: {', '.join(p.name for p in pkg.step_files)}"
+                          + (" - attached to the footprint if it has no 3D body of its own\n"
+                             if self._step_file else
+                             " - several, so none is attached automatically\n"), ""))
         for n in pkg.notes:
             lines.append(("  Note: " + n + "\n", "warn"))
         self._set_info(lines)
@@ -449,6 +468,8 @@ class App:
         var.set(path)
         if key:
             self.settings.set(key, path)
+        else:
+            self._step_file = ""          # a hand-picked source: no package STEP
 
     # ================= component choice (multi-part source libraries) =================
     def _refresh_components(self, prefer: str = "") -> None:
@@ -474,9 +495,9 @@ class App:
     def _cse_folder(self) -> Path:
         return Path(self.settings.get("cse_watch_dir") or default_downloads_dir())
 
-    def _cse_toggle(self) -> None:
+    def _cse_toggle(self, site: str = "cse") -> None:
         if self._watcher:
-            self._cse_stop("Stopped waiting for the Component Search Engine download.")
+            self._cse_stop("Stopped waiting for the download.")
             return
         mpn = self._current_mpn()
         if not mpn:
@@ -495,13 +516,17 @@ class App:
                                      "PcbLib first - the download is imported into them "
                                      "automatically.", parent=self.root)
                 return
-        src = next(s for s in MANUAL_SOURCES if s.key == "cse")
+        src = next(s for s in MANUAL_SOURCES if s.key == site)
         webbrowser.open(src.url(mpn))
         self._watcher = DownloadWatcher(folder, mpn)
-        self.cse_btn.configure(text="Stop waiting for CSE download")
+        for key, btn in self._site_btns.items():
+            if key == site:
+                btn.configure(text="Stop waiting for the download")
+            else:
+                btn.state(["disabled"])
         signed_in = all(self._cse_login)
-        steps = [("Component Search Engine - opened in your browser for " + mpn + "\n", "bold"),
-                 ("  1. Open the part and click its download button (ECAD model).\n", ""),
+        steps = [(f"{src.name} - opened in your browser for {mpn}\n", "bold"),
+                 (f"  1. {WATCH_SITES[site][1]}\n", ""),
                  (f"  2. This app watches {folder}. A full library zip is imported directly; "
                   "a Library Loader part file (.epw) makes the app download the model itself "
                   + ("with your saved CSE login.\n" if signed_in else
@@ -516,7 +541,9 @@ class App:
 
     def _cse_stop(self, status: str) -> None:
         self._watcher = None
-        self.cse_btn.configure(text="From Component Search Engine...")
+        for key, btn in self._site_btns.items():
+            btn.configure(text=WATCH_SITES[key][0])
+            btn.state(["!disabled"])
         self.status_var.set(status)
 
     def _cse_poll(self) -> None:
@@ -738,6 +765,7 @@ class App:
                     return
             self.settings.set("samacsys_schlib", sch)
             self.settings.set("samacsys_pcblib", pcb)
+        self._step_file = ""
         self.src_pcb.set(pcb)
         self.src_sch.set(sch)          # triggers the component list (picks the MPN if present)
         found = self.comp_var.get()
@@ -783,6 +811,7 @@ class App:
         for k, v in fill.items():
             if v and not self.param_vars[k].get().strip():
                 self.param_vars[k].set(v)
+        self._step_file = ""                      # the EasyEDA builder embeds its own STEP
         self.src_pcb.set(str(st.pcblib))
         self.src_sch.set(str(st.schlib))
         self._refresh_components(prefer=st.build.symbol)
@@ -812,7 +841,8 @@ class App:
             description=params["Description"], on_conflict=self.conflict_var.get(),
             link_mode=LINK_MODES.get(self.link_var.get(), "name"),
             source_label=Path(self.src_sch.get()).parent.name if self.src_sch.get() else "",
-            component="" if self.comp_var.get() == ALL_COMPONENTS else self.comp_var.get())
+            component="" if self.comp_var.get() == ALL_COMPONENTS else self.comp_var.get(),
+            step_file=self._step_file if os.path.isfile(self._step_file) else "")
         if not req.component and len(self.comp_box["values"]) > 1 \
                 and self.comp_var.get() != ALL_COMPONENTS:
             messagebox.showerror("Cannot import", "Choose the component to import (the source "

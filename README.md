@@ -35,6 +35,12 @@ It runs without Claude, AI services or subscriptions, using only the Python stan
         - The part is then imported automatically into your destination libraries. They are backed up first, the same duplicate check and validation as every other import apply, and existing parts are never overwritten.
 
         Click the button again to stop waiting. Settings also lets you choose the watched folder and turn automatic import off. The login status is shown next to the button.
+      - **From Mouser (ECAD model)…** opens Mouser's search for the MPN in your browser.
+        1. Open the part and click the **ECAD Model** icon; if Mouser asks, sign in with your Component Search Engine account.
+        2. Mouser saves the full SamacSys package (`LIB_<MPN>.zip`), which contains the Altium SchLib/PcbLib and a 3D STEP.
+        3. The app picks it up, imports it automatically and **attaches the STEP** as the footprint's 3D body. SamacSys ships the STEP separately; it is placed at the footprint origin, so check the 3D view.
+
+        This uses no API: it is just your browser download.
       - **From SamacSys library…** picks a part from the library the official **SamacSys Library Loader** adds parts to. Install the official loader from componentsearchengine.com and log in *in the loader*; this app never asks for your CSE password. With the loader running, download the part on Component Search Engine, then click the button. The first time, you select the SamacSys SchLib and PcbLib once.
       - **LCSC # + Fetch from EasyEDA (unofficial)** downloads the part's EasyEDA data by LCSC number (e.g. `C2040`) and builds it in Altium into new staging libraries. It uses the EasyEDA-Importer code. The data comes from an undocumented EasyEDA API (community library), so check the footprint and pinout against the datasheet. `LCSC Part #` is filled in automatically.
    2. **Component to import:** if the source library holds several symbols, pick one. The app pre-selects the one matching the MPN or LCSC number.

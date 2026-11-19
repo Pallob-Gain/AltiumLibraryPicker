@@ -10,6 +10,25 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-19 (latest) — Mouser ECAD download + automatic 3D model ✅ verified with your real download
+
+### 1. What was implemented
+- **Why:** the CSE download button sent you to a login page again, but Mouser's ECAD Model icon worked. Your real Mouser download (`LIB_50YXJ22MTA5X11.zip`) is the **full SamacSys package**: `Altium/*.SchLib`, `Altium/*.PcbLib`, `3D/*.stp`, plus the other ECAD formats. No API and no CSE request from the app are needed.
+- **Step 3 → "From Mouser (ECAD model)…"** opens the Mouser search for the MPN, watches Downloads, and imports automatically. It shares the download watcher with the CSE button; only one can wait at a time.
+- **The 3D model is attached automatically.** SamacSys PcbLibs have no embedded 3D body, so when a package contains exactly one STEP, the import adds it as a 3D body to each newly copied footprint that has none. It is placed at the footprint origin, unrotated. This reuses EasyEDA-Importer's verified 3D-body code, and Messages shows "Added 3D model …".
+
+### 2. Verified
+- Your real Mouser zip imported into a temporary library:
+  - symbol 2/2 pins, footprint 5/5 primitives, pin check passed, footprint found by Altium's library search;
+  - the footprint has **1 3D body** after reopening the saved library from disk.
+- The full GUI flow with the Mouser button on the same file: opened Mouser, showed progress, picked the file up, imported automatically, and the 3D body is present.
+- 66 offline tests pass.
+
+### 3. Please check
+In Altium, open the footprint's 3D view, press 3, and check the STEP sits correctly on the pads. SamacSys models are normally made for the footprint origin.
+
+---
+
 ## 2026-11-19 (later) — CSE login + automatic model download ✅ login verified live; full download pending one real part
 
 ### 1. What was implemented

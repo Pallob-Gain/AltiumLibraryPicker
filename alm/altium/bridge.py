@@ -125,6 +125,7 @@ class ImportReport:
     status: str = "ERROR"
     added_symbols: list[str] = field(default_factory=list)
     added_footprints: list[str] = field(default_factory=list)
+    added_3d: list[tuple[str, str]] = field(default_factory=list)   # (footprint, step file)
     existing_footprints: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     links: list[tuple[str, str, str]] = field(default_factory=list)
@@ -159,6 +160,8 @@ class ImportReport:
         lines += [f"ERROR: {e}" for e in self.errors]
         lines += [f"Added symbol: {s}" for s in self.added_symbols]
         lines += [f"Added footprint: {f}" for f in self.added_footprints]
+        lines += [f"Added 3D model: {s} -> {f} (placed at the footprint origin - check the 3D "
+                  "view)" for f, s in self.added_3d]
         lines += [f"Skipped: {s}" for s in self.skipped]
         lines += [f"Linked: {s} -> {f} (library: {loc or 'any'})" for s, f, loc in self.links]
         lines += [f"Parameter: {p}" for p in self.params]
@@ -200,6 +203,9 @@ def parse_result(text: str) -> ImportReport:
             r.added_symbols.append(val)
         elif key == "ADDED_FOOTPRINT":
             r.added_footprints.append(val)
+        elif key == "ADDED_3D":
+            fp, _, step = val.partition("|")
+            r.added_3d.append((fp, step))
         elif key == "EXISTING_FOOTPRINT":
             r.existing_footprints.append(val)
         elif key == "SKIPPED_SYMBOL":

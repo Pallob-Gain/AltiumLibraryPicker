@@ -132,6 +132,67 @@ begin
   DestLib.CurrentComponent := NewFp;
 end;
 
+function CountBodies(Fp : IPCB_LibComponent) : Integer;
+var
+  It : IPCB_GroupIterator;
+  Prim : IPCB_Primitive;
+begin
+  Result := 0;
+  It := Fp.GroupIterator_Create;
+  It.AddFilter_ObjectSet(MkSet(eComponentBodyObject));
+  Prim := It.FirstPCBObject;
+  while Prim <> nil do
+  begin
+    Inc(Result);
+    Prim := It.NextPCBObject;
+  end;
+  Fp.GroupIterator_Destroy(It);
+end;
+
+{ Attach a STEP file as 3D body to a footprint that has none (SamacSys ships the STEP separately).
+  Body creation follows EasyEDA-Importer's verified BuildFootprint code. Placed at the footprint
+  origin, unrotated - the user must check the 3D view. }
+procedure AttachStep(DestLib : IPCB_Library; Fp : IPCB_LibComponent; StepFile : String);
+var
+  Body : IPCB_ComponentBody;
+  Model : IPCB_Model;
+begin
+  if (StepFile = '') or (not FileExists(StepFile)) then Exit;
+  if CountBodies(Fp) > 0 then Exit;
+  PCBServer.PreProcess;
+  try
+    Body := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    try
+      Body.BodyProjection := eBoardSide_Top;
+      Body.Layer := eMechanical13;
+    except
+    end;
+    Model := Body.ModelFactory_FromFilename(StepFile, False);
+    if Model = nil then
+    begin
+      Res.Add('WARNING=Altium could not read the 3D model ' + ExtractFileName(StepFile) + '.');
+      Exit;
+    end;
+    try
+      Body.SetState_FromModel;
+    except
+    end;
+    Model.SetState(0, 0, 0, 0);
+    Body.Model := Model;
+    try
+      Body.SetState_FromModel;
+    except
+    end;
+    Body.MoveByXY(DestLib.Board.XOrigin, DestLib.Board.YOrigin);
+    DestLib.Board.AddPCBObject(Body);
+    Fp.AddPCBObject(Body);
+    PCBServer.SendMessageToRobots(Fp.I_ObjectAddress, c_Broadcast, PCBM_BoardRegisteration, Body.I_ObjectAddress);
+    Res.Add('ADDED_3D=' + Fp.Name + '|' + ExtractFileName(StepFile));
+  finally
+    PCBServer.PostProcess;
+  end;
+end;
+
 { Returns the destination name for a source footprint (copies it if needed). '' if not found. }
 function ProvideFootprint(SrcLib, DestLib : IPCB_Library; Name : String) : String;
 var
@@ -184,6 +245,7 @@ begin
          ' primitives. Library NOT saved.');
   Res.Add('VERIFY_FOOTPRINT=' + NewName + '|primitives ' + IntToStr(nNew) + '/' + IntToStr(nSrc));
   Res.Add('ADDED_FOOTPRINT=' + NewName);
+  if not Failed then AttachStep(DestLib, NewFp, JobVal('StepFile'));
   FpOld.Add(UpperCase(Name));
   FpNew.Add(NewName);
   Result := NewName;

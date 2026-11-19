@@ -27,6 +27,7 @@ class ImportRequest:
     link_mode: str = "name"        # name | path | any
     source_label: str = ""
     component: str = ""            # '' = every symbol in the source SchLib
+    step_file: str = ""            # STEP attached to new footprints that have no 3D body
 
 
 def validate(req: ImportRequest) -> list[str]:
@@ -67,6 +68,7 @@ def job_values(req: ImportRequest) -> dict[str, str]:
               "DestSchLib": req.dest_schlib, "DestPcbLib": req.dest_pcblib,
               "OnConflict": req.on_conflict, "LinkMode": req.link_mode,
               "Description": req.description, "Component": req.component,
+              "StepFile": req.step_file,
               "KeepOpen": "1"}   # leave saved libs loaded; 'finish' closes them (see run_import)
     names = [n for n in STANDARD_PARAMS] + [n for n in req.params if n not in STANDARD_PARAMS]
     values["ParamCount"] = str(len(names))
