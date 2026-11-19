@@ -24,6 +24,14 @@ It runs without Claude, AI services or subscriptions, using only the Python stan
 3. **Import into Altium:**
    1. Choose a source. There are three ways:
       - **Select file…** and pick what you downloaded: `.SchLib`, `.PcbLib`, `.LibPkg`, `.IntLib` or `.zip`. **Select folder…** also works. The app finds the source SchLib and PcbLib itself, and Altium extracts an IntLib first.
+      - **From Component Search Engine…** opens CSE's search for the MPN in your browser and watches your Downloads folder.
+        1. Sign in on componentsearchengine.com in the browser; the browser remembers you.
+        2. Click **Download** and choose **Altium Designer**.
+        3. The app shows the download progress, picks the file up when it is complete, and imports it automatically into your destination libraries. It backs them up first, uses the same duplicate check and validation as every other import, and never overwrites existing parts.
+
+        Click the button again to stop waiting. Under **Settings → Component Search Engine…** you can choose the watched folder, turn automatic import off, and open CSE to sign in or out.
+
+        **Why there is no CSE email/password login in the app:** CSE has no public API for other applications. Its operator's terms (Supplyframe Terms of Service §4.2(e)) do not allow software to send automated searches or downloads. So the app never asks for, stores or sends your CSE credentials. Unofficial tools that log in directly use undocumented endpoints.
       - **From SamacSys library…** picks a part from the library the official **SamacSys Library Loader** adds parts to. Install the official loader from componentsearchengine.com and log in *in the loader*; this app never asks for your CSE password. With the loader running, download the part on Component Search Engine, then click the button. The first time, you select the SamacSys SchLib and PcbLib once.
       - **LCSC # + Fetch from EasyEDA (unofficial)** downloads the part's EasyEDA data by LCSC number (e.g. `C2040`) and builds it in Altium into new staging libraries. It uses the EasyEDA-Importer code. The data comes from an undocumented EasyEDA API (community library), so check the footprint and pinout against the datasheet. `LCSC Part #` is filled in automatically.
    2. **Component to import:** if the source library holds several symbols, pick one. The app pre-selects the one matching the MPN or LCSC number.
@@ -47,7 +55,7 @@ What the import does, all inside Altium through its scripting API:
 - If a destination library is open in Altium **with unsaved changes**, the import refuses to run. Save or close the library first.
 
 ## Data folder `%APPDATA%\AltiumLibraryManager\`
-`settings.json` · `credentials.json` (encrypted with Windows DPAPI) · `alm.db` (imported components and search log) · `alm.log` · `backups\` · `jobs\` (each import's job, script and result) · `extracted\` · `easyeda\` (EasyEDA downloads, `cache\` part files, `3D\` STEP models, `stage\` built staging libraries)
+`settings.json` · `credentials.json` (encrypted with Windows DPAPI) · `alm.db` (imported components and search log) · `alm.log` · `backups\` · `jobs\` (each import's job, script and result) · `extracted\` · `downloads\` (copies of finished CSE downloads) · `easyeda\` (EasyEDA downloads, `cache\` part files, `3D\` STEP models, `stage\` built staging libraries)
 
 ## Contributing
 Changes are welcome: fork the repository, make the change, run the tests (below), and open a pull request. The design notes are in `architecture.md`. Altium-side code is plain DelphiScript in `alm/altium/*.pas`; keep changes small and test them on temporary libraries.

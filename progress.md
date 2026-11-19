@@ -10,6 +10,45 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-19 — Component Search Engine integration (browser workflow) ✅ (pending your test with a real CSE account)
+
+### 1. What was implemented
+- **Step 3 → "From Component Search Engine…"**:
+  1. It opens CSE's search for the MPN in your browser.
+  2. It watches your Downloads folder, with live status: *waiting* → *Downloading LIB_x.zip: 1.2 MB* → *Download complete*. It handles Chrome/Edge `.crdownload` and Firefox `.part` files.
+  3. It copies the file into the app's data folder, extracts it (zip, or an IntLib through Altium), picks the component, and **imports automatically** into the selected destination with the existing backup, duplicate handling and verification.
+  4. Clicking the button again stops waiting. A timeout after 15 minutes gives a clear message.
+- **Settings → Component Search Engine…**: explains the sign-in, opens CSE to sign in or out, chooses the watched folder, and turns automatic import on or off.
+- `alm/cse.py`: original code. `tests/test_cse.py` has 8 tests.
+
+### 2. Verification: is direct CSE login/download allowed? (requirement 9)
+**No, not verified as permitted, so it is not implemented.**
+- No public CSE API exists. The only official client is SamacSys' Library Loader.
+- The Supplyframe Terms of Service §4.2(e) prohibit "software or automated agents or scripts" that "generate automated searches, requests and queries, or … strip or mine data".
+- olback/library-loader is AGPL-3.0 and describes itself as unofficial.
+
+Therefore the in-app email/password login, "Remember Login" and logout (requirements 1, 2 and part of 7) are **not implemented**. Sign-in, "remember me" and sign-out happen in your browser on componentsearchengine.com. The app never asks for, stores or sends CSE credentials. MPN search and automatic import (requirements 3 and 5) work through the browser. Download (requirement 4) is your click on CSE's own Download button.
+
+### 3. How to run / what to test
+1. Select the destination libraries (use copies first) and enter the MPN.
+2. Click **From Component Search Engine…**, sign in on CSE in the browser, click Download, and choose Altium Designer.
+3. The app imports the part by itself. Check Messages, then check the part in Altium.
+
+Please also tell me what the CSE zip contains for Altium (IntLib, or SchLib/PcbLib), because both are supported but only a simulated download was tested.
+
+### 4. What works (verified)
+- A simulated Chrome-style download (`LIB_50YXJ22MTA5X11.zip.crdownload` growing, then renamed) was detected with progress, claimed, and auto-imported through the running AD26 into a temporary library.
+  - Symbol and footprint were added and linked.
+  - Existing parts were untouched.
+  - Backups were made.
+- 53 offline unit tests pass.
+
+### 5. Limitations
+- Not tested against a real CSE download (no CSE account here). If CSE's Altium zip layout differs, the import reports what it found.
+- If the official Library Loader is running, it may move the zip out of Downloads first. The app copies the file the moment it is complete; if the Library Loader wins, use **From SamacSys library…**.
+
+---
+
 ## 2026-11-19 — Fix "footprint not found", SamacSys source, EasyEDA by LCSC number ✅ (pending your test)
 
 ### 1. What was implemented

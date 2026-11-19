@@ -31,7 +31,8 @@ def atomic_write_text(path: Path, text: str) -> None:
 
 class Settings:
     DEFAULTS = {"schlib": "", "pcblib": "", "last_mpn": "", "last_download_dir": "",
-                "on_conflict": "skip", "link_mode": "name", "x2_path": ""}
+                "on_conflict": "skip", "link_mode": "name", "x2_path": "",
+                "cse_watch_dir": "", "cse_auto_import": True}
 
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else app_dir() / "settings.json"

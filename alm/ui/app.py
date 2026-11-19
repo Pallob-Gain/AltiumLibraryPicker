@@ -25,6 +25,7 @@ from ..models import ProviderState
 from ..providers.links import ALTIUM_MPS_HELP, MANUAL_SOURCES
 from ..providers.mouser import CRED_NAME as MOUSER_CRED
 from ..search import SearchOutcome, run_search
+from ..cse import CSE_HOME, DownloadWatcher, claim, default_downloads_dir, human_size
 from ..easyeda.fetch import UNOFFICIAL_NOTE, clean_lcsc, fetch_and_build
 from ..schlib_reader import best_match, list_symbols
 from ..sources import resolve_source
@@ -53,6 +54,8 @@ class App:
             root, settings, creds, db, providers)
         self.outcome: SearchOutcome | None = None
         self.work_dir = app_dir()
+        self._watcher: DownloadWatcher | None = None
+        self._auto_import_next = False
         self._queue: queue.Queue = queue.Queue()
         self._busy = False
         self._build()
@@ -67,6 +70,7 @@ class App:
         menubar = tk.Menu(r)
         m = tk.Menu(menubar, tearoff=False)
         m.add_command(label="API keys...", command=self._api_keys_dialog)
+        m.add_command(label="Component Search Engine...", command=self._cse_dialog)
         m.add_command(label="Open data folder (backups, logs)",
                       command=lambda: os.startfile(self.work_dir))
         menubar.add_cascade(label="Settings", menu=m)
@@ -129,8 +133,11 @@ class App:
                    command=self._pick_download_file).pack(side="left")
         ttk.Button(bf, text="Select folder...", command=self._pick_download_folder).pack(
             side="left", padx=4)
+        self.cse_btn = ttk.Button(bf, text="From Component Search Engine...",
+                                  command=self._cse_toggle)
+        self.cse_btn.pack(side="left", padx=(12, 4))
         ttk.Button(bf, text="From SamacSys library...", command=self._from_samacsys).pack(
-            side="left", padx=(12, 4))
+            side="left", padx=(0, 4))
         ttk.Label(bf, text="   or LCSC #:").pack(side="left")
         self.lcsc_var = tk.StringVar()
         lcsc_entry = ttk.Entry(bf, textvariable=self.lcsc_var, width=12)
@@ -241,6 +248,7 @@ class App:
         for b in (self.search_btn, self.import_btn, self.lcsc_btn):
             b.state(["!disabled"])
         if err is not None:
+            self._auto_import_next = False
             self.status_var.set(f"Failed: {err}")
             self._set_info([(f"Failed: {err}", "err")])
             return
@@ -369,6 +377,7 @@ class App:
             pkg = resolve_source(path, self.work_dir / "extracted")
         except Exception as e:
             log.exception("Resolving source failed")
+            self._auto_import_next = False
             messagebox.showerror("Cannot read download", str(e), parent=self.root)
             return
         if pkg.intlib and not (pkg.schlib and pkg.pcblib):
@@ -388,6 +397,13 @@ class App:
         for n in pkg.notes:
             lines.append(("  Note: " + n + "\n", "warn"))
         self._set_info(lines)
+        if self._auto_import_next:
+            self._auto_import_next = False
+            if pkg.schlib and pkg.pcblib:
+                self.root.after(100, lambda: self.on_import(auto=True))
+            else:
+                self.status_var.set("Automatic import skipped: the download has no "
+                                    "SchLib/PcbLib (see Messages).")
 
     def _extract_intlib(self, intlib: Path) -> None:
         x2 = self._x2()
@@ -439,6 +455,134 @@ class App:
         if len(names) > 1 and not pick:
             self.status_var.set(f"The source library has {len(names)} symbols - choose the "
                                 "component to import.")
+
+    # ================= Component Search Engine (browser workflow, see alm/cse.py) =========
+    def _cse_folder(self) -> Path:
+        return Path(self.settings.get("cse_watch_dir") or default_downloads_dir())
+
+    def _cse_toggle(self) -> None:
+        if self._watcher:
+            self._cse_stop("Stopped waiting for the Component Search Engine download.")
+            return
+        mpn = self._current_mpn()
+        if not mpn:
+            return
+        folder = self._cse_folder()
+        if not folder.is_dir():
+            messagebox.showerror("Component Search Engine", f"Download folder not found:\n{folder}"
+                                 "\n\nSet it under Settings > Component Search Engine.",
+                                 parent=self.root)
+            return
+        auto = bool(self.settings.get("cse_auto_import", True))
+        if auto:
+            if check_library(self.dst_sch.get(), ".SchLib") or \
+                    check_library(self.dst_pcb.get(), ".PcbLib"):
+                messagebox.showerror("Component Search Engine", "Select the destination SchLib and "
+                                     "PcbLib first - the download is imported into them "
+                                     "automatically.", parent=self.root)
+                return
+        src = next(s for s in MANUAL_SOURCES if s.key == "cse")
+        webbrowser.open(src.url(mpn))
+        self._watcher = DownloadWatcher(folder, mpn)
+        self.cse_btn.configure(text="Stop waiting for CSE download")
+        steps = [("Component Search Engine - opened in your browser for " + mpn + "\n", "bold"),
+                 ("  1. Sign in on componentsearchengine.com in the browser (your browser "
+                  "remembers the login).\n", ""),
+                 ("  2. Open the part and click Download, choose Altium Designer.\n", ""),
+                 (f"  3. This app watches {folder} and picks the file up when it is "
+                  "complete.\n", "")]
+        if auto:
+            steps.append((f"  It is then imported automatically into:\n    {self.dst_sch.get()}\n"
+                          f"    {self.dst_pcb.get()}\n  (backed up first, never overwrites "
+                          "existing parts).\n", ""))
+        self._set_info(steps)
+        self._cse_poll()
+
+    def _cse_stop(self, status: str) -> None:
+        self._watcher = None
+        self.cse_btn.configure(text="From Component Search Engine...")
+        self.status_var.set(status)
+
+    def _cse_poll(self) -> None:
+        w = self._watcher
+        if not w:
+            return
+        try:
+            st = w.poll()
+        except Exception as e:
+            log.exception("Download watcher failed")
+            self._cse_stop(f"Watching the download folder failed: {e}")
+            return
+        if st.state == "waiting":
+            self.status_var.set(st.message + " ...")
+        elif st.state == "downloading":
+            self.status_var.set(f"{st.message}: {human_size(st.size)}")
+        elif st.state == "timeout":
+            self._cse_stop("Component Search Engine: " + st.message + " Click the button to "
+                           "try again.")
+            return
+        elif st.state == "ready":
+            self._cse_stop(f"Download complete: {st.path.name} ({human_size(st.size)})")
+            self._cse_received(st)
+            return
+        self.root.after(1000, self._cse_poll)
+
+    def _cse_received(self, st) -> None:
+        try:
+            copy = claim(st.path, self.work_dir)
+        except OSError as e:
+            messagebox.showerror("Component Search Engine",
+                                 f"Could not read {st.path}:\n{e}\n\nIf the SamacSys Library Loader "
+                                 "is running it may have moved the file - use 'From SamacSys "
+                                 "library...' instead.", parent=self.root)
+            return
+        if not st.matches_mpn:
+            self.status_var.set(f"Note: {st.path.name} does not contain the MPN in its name - "
+                                "check the component.")
+        self._auto_import_next = bool(self.settings.get("cse_auto_import", True))
+        self._load_download(copy)
+
+    def _cse_dialog(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Component Search Engine")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        frm = ttk.Frame(dlg, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, wraplength=560, justify="left", text=(
+            "Sign-in: in your web browser. Component Search Engine has no public API for other "
+            "applications, and its operator's terms (Supplyframe) do not allow software to send "
+            "automated searches or downloads. So this app does not ask for, store or send your "
+            "CSE email/password. You sign in on componentsearchengine.com in your browser (it "
+            "remembers you); this app opens the search there and imports the file you download."
+        )).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Button(frm, text="Open componentsearchengine.com (sign in / sign out)",
+                   command=lambda: webbrowser.open(CSE_HOME)).grid(row=1, column=0, columnspan=3,
+                                                                   sticky="w", pady=6)
+        ttk.Label(frm, text="Watch this download folder:").grid(row=2, column=0, sticky="w")
+        folder = tk.StringVar(value=str(self._cse_folder()))
+        ttk.Entry(frm, textvariable=folder, width=50).grid(row=2, column=1, padx=4)
+
+        def browse():
+            p = filedialog.askdirectory(parent=dlg, initialdir=folder.get())
+            if p:
+                folder.set(os.path.normpath(p))
+        ttk.Button(frm, text="Browse...", command=browse).grid(row=2, column=2)
+        auto = tk.BooleanVar(value=bool(self.settings.get("cse_auto_import", True)))
+        ttk.Checkbutton(frm, variable=auto, text="Import into the destination libraries "
+                        "automatically when the download is complete").grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=6)
+
+        def save():
+            if not Path(folder.get()).is_dir():
+                messagebox.showerror("Folder not found", folder.get(), parent=dlg)
+                return
+            same = Path(folder.get()) == default_downloads_dir()
+            self.settings.set("cse_watch_dir", "" if same else folder.get())
+            self.settings.set("cse_auto_import", auto.get())
+            self.status_var.set("Component Search Engine settings saved.")
+            dlg.destroy()
+        ttk.Button(frm, text="Save", command=save).grid(row=4, column=2, sticky="e")
 
     # ================= SamacSys Library Loader library =================
     def _from_samacsys(self) -> None:
@@ -530,7 +674,8 @@ class App:
                                  "settings.json in the data folder.", parent=self.root)
         return x2
 
-    def on_import(self) -> None:
+    def on_import(self, auto: bool = False) -> None:
+        """auto=True: started by a finished CSE download (destinations were shown up front)."""
         params = {k: v.get().strip() for k, v in self.param_vars.items()}
         req = ImportRequest(
             src_schlib=self.src_sch.get(), src_pcblib=self.src_pcb.get(),
@@ -562,7 +707,7 @@ class App:
                     parent=self.root):
                 return
             timeout = 420
-        if not messagebox.askokcancel(
+        if not auto and not messagebox.askokcancel(
                 "Confirm import",
                 f"Import from:\n  {req.src_schlib}\n  {req.src_pcblib}\n\ninto:\n  {req.dest_schlib}\n"
                 f"  {req.dest_pcblib}\n\nBoth destination libraries are backed up first. Existing "
