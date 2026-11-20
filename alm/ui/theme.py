@@ -78,7 +78,7 @@ def apply(root: tk.Tk) -> None:
                     darkcolor=SURFACE, padding=(5, 3), arrowcolor=MUTED, background=SURFACE)
         s.map(w, bordercolor=[("focus", ACCENT)], lightcolor=[("focus", SURFACE)],
               fieldbackground=[("readonly", SURFACE), ("disabled", BG)])
-    s.map("TEntry", fieldbackground=[("readonly", "#f3f4f6")])
+    s.map("TEntry", fieldbackground=[("readonly", "#f3f4f6"), ("disabled", BG)])
     s.map("TCombobox", selectbackground=[("readonly", SURFACE)],
           selectforeground=[("readonly", TEXT)], background=[("active", HOVER)])
 

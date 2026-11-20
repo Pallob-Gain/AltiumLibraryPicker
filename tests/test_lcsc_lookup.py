@@ -39,6 +39,12 @@ class LookupTests(unittest.TestCase):
         self.assertTrue(ll.same_maker("Vishay Dale", "Vishay Intertech"))
         self.assertTrue(ll.same_maker("Analog Devices Inc.", "ADI(Analog Devices)"))
         self.assertTrue(ll.same_maker("Microchip Technology", "Microchip Tech"))
+        self.assertTrue(ll.same_maker("ON Semiconductor", "onsemi"))
+        self.assertTrue(ll.same_maker("Würth Elektronik", "Wurth Elektronik"))
+        self.assertTrue(ll.same_maker("STMicroelectronics", "ST Microelectronics"))
+        self.assertFalse(ll.same_maker("ON Semiconductor", "ON Shine"))          # short word
+        self.assertFalse(ll.same_maker("Shenzhen Fuman Elec", "Shenzhen Slkor"))  # place name
+        self.assertFalse(ll.same_maker("TI", "Texas Instruments"))               # -> chooser
         self.assertFalse(ll.same_maker("Texas Instruments", "Raspberry Pi"))
         self.assertFalse(ll.same_maker("", "Raspberry Pi"))
 
@@ -84,6 +90,16 @@ class RecentDownloadTests(unittest.TestCase):
         self.make("busy.zip", 10)
         self.make("busy.zip.crdownload", 5)
         self.assertIsNone(self.find())
+
+    def test_skips_downloads_already_used(self):
+        from alm.cse import file_key
+        used = self.make("ul_RP2040.zip", 120)
+        self.make("other.zip", 600)
+        st = recent_download(self.dir, "RP2040", 1800, clock=lambda: self.now,
+                             used={file_key(used)})
+        self.assertEqual(st.path.name, "other.zip")
+        self.assertIsNone(recent_download(self.dir, "RP2040", 1800, clock=lambda: self.now,
+                                          used={file_key(used), file_key(self.dir / "other.zip")}))
 
     def test_missing_folder(self):
         self.assertIsNone(recent_download(self.dir / "nope", "X", 1800))

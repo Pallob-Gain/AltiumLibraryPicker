@@ -24,7 +24,7 @@ from ..importer import ImportRequest, record_import, run_import, validate
 from ..models import ProviderState
 from ..providers.links import ALTIUM_MPS_HELP, MANUAL_SOURCES
 from ..search import SearchOutcome, run_search
-from ..cse import (CSE_HOME, DownloadWatcher, claim, default_downloads_dir, human_size,
+from ..cse import (CSE_HOME, DownloadWatcher, claim, default_downloads_dir, file_key, human_size,
                    recent_download)
 from ..cse_client import (CRED_EMAIL, CRED_PASSWORD, CseAuthError, CseClient, CseError,
                           exact_matches, parse_epw, read_epw)
@@ -84,6 +84,7 @@ class App:
         self.work_dir = app_dir()
         self._watcher: DownloadWatcher | None = None
         self._watch_auto = False        # import what the watcher finds automatically
+        self._used_downloads: set = set()   # cse.file_key of downloads already used
         self._auto_import_next = False
         self._progress_text = ""
         self._step_file = ""
@@ -360,10 +361,12 @@ class App:
         best = lcsc_lookup.pick(parts, maker)
         if not best:
             if not parts:
-                self._append_info([(f"LCSC Part #: {o.query} is not sold by LCSC.\n", "")])
+                self._append_info([(f"LCSC Part #: LCSC has no listing for exactly {o.query} - "
+                                    "you can still use the download buttons in step 3.\n", "")])
             return
         top = best[0]
-        if not self.param_vars["LCSC Part #"].get().strip():
+        current = self.param_vars["LCSC Part #"].get().strip()
+        if not current or (o.best is not None and current == o.best.lcsc):   # auto-filled
             self.param_vars["LCSC Part #"].set(top.code)
         self.lcsc_var.set(top.code)                 # ready for 'EasyEDA by LCSC #: Fetch'
         line = (f"LCSC Part #: {top.code} ({top.manufacturer}"
@@ -640,7 +643,8 @@ class App:
             check_library(self.dst_sch.get(), ".SchLib")
             or check_library(self.dst_pcb.get(), ".PcbLib"))
         if site == "download":
-            found = recent_download(folder, mpn, RECENT_DOWNLOAD_SECS)
+            found = recent_download(folder, mpn, RECENT_DOWNLOAD_SECS,
+                                    used=self._used_downloads)
             if found:
                 # an older file is imported automatically only if its name has the MPN
                 self.status_var.set(f"Found download: {found.path.name} "
@@ -711,6 +715,7 @@ class App:
 
     def _cse_received(self, st, auto: bool | None = None) -> None:
         try:
+            self._used_downloads.add(file_key(st.path))   # 'Look for download' skips it later
             copy = claim(st.path, self.work_dir)
         except OSError as e:
             messagebox.showerror("Download",
@@ -723,13 +728,14 @@ class App:
         except (CseError, OSError) as e:
             messagebox.showerror("Component Search Engine", str(e), parent=self.root)
             return
+        auto = self._watch_auto if auto is None else auto
         if epw:
-            self._cse_fetch(epw)
+            self._cse_fetch(epw, auto)
             return
         if not st.matches_mpn:
             self.status_var.set(f"Note: {st.path.name} does not contain the MPN in its name - "
                                 "check the component.")
-        self._auto_import_next = self._watch_auto if auto is None else auto
+        self._auto_import_next = auto
         self._load_download(copy)
 
     # ---- CSE direct: search by MPN -> download -> import (no browser) ----
@@ -831,7 +837,7 @@ class App:
                      lambda: CseClient(email, password).download(part.part_id, out, progress),
                      done)
 
-    def _cse_fetch(self, epw) -> None:
+    def _cse_fetch(self, epw, auto: bool) -> None:
         """Download the model for a CSE part file with the user's CSE login, then import."""
         email, password = self._cse_login
         if not (email and password):
@@ -856,7 +862,7 @@ class App:
 
         def done(path):
             self._cse_update_login_label(verified=True)
-            self._auto_import_next = bool(self.settings.get("cse_auto_import", True))
+            self._auto_import_next = auto
             self._load_download(path)
 
         self._run_bg(f"Downloading {epw.mpn or epw.part_id} from Component Search Engine...",
@@ -1403,7 +1409,7 @@ class App:
 
 def run_gui(settings: Settings, creds: CredentialStore, db: Database, providers: list) -> None:
     root = tk.Tk()
-    icon =Path(__file__).with_name("app.ico")      # also bundled inside the .exe
+    icon = Path(__file__).with_name("app.ico")      # also bundled inside the .exe
     if icon.exists():
         try:
             root.iconbitmap(default=str(icon))

@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from .. import lcsc_lookup
 from ..models import SearchResult
+from ..ranking import normalize_mpn
 from .base import Provider, ProviderError
+
+MAX_SIMILAR = 30          # near-miss rows shown (all exact listings are always kept)
 
 
 class LcscProvider(Provider):
@@ -33,8 +36,13 @@ def parse_response(query: str, reply: dict) -> list[SearchResult]:
         parts = lcsc_lookup.all_parts(reply)
     except lcsc_lookup.LcscError as e:
         raise ProviderError(str(e)) from None
+    want = normalize_mpn(query)
+    exact = [p for p in parts if normalize_mpn(p.mpn) == want]
+    similar = [p for p in parts if normalize_mpn(p.mpn) != want]
+    by_stock = lambda p: p.stock                                    # noqa: E731
     out = []
-    for p in sorted(parts, key=lambda p: p.stock, reverse=True):   # in stock first
+    for p in sorted(exact, key=by_stock, reverse=True) + \
+            sorted(similar, key=by_stock, reverse=True)[:MAX_SIMILAR]:
         r = SearchResult(query=query, mpn=p.mpn, manufacturer=p.manufacturer, source="LCSC",
                          source_kind="api", description=p.description,
                          datasheet_url=p.datasheet_url, source_url=p.url, supplier="LCSC",

@@ -37,7 +37,7 @@ def run_search(mpn: str, providers: list[Provider],
     for p in providers:
         if not p.configured():
             statuses.append(ProviderStatus(p.name, ProviderState.NOT_CONFIGURED,
-                                           message="No API key (Settings > API keys)",
+                                           message="Not configured",
                                            url=p.help_url))
             continue
         try:

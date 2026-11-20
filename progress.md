@@ -10,6 +10,16 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-20 — v1.4.1: code-review fixes ✅
+A review of v1.1.3..v1.4.0 (`/code-review high --fix`, plus my own follow-up) found these bugs, all fixed with tests:
+- **SnapEDA restored session (verified live):** with a remembered session, `/account/login/` answers 301 → `/home/`, so every search failed after an app restart. `_login_page` now loads `/home/` (which sets csrftoken) when signed in. Live: 301 → 200 → search 200.
+- **LCSC page size** went from 25 to 100. LM358 now gives 13 exact listings (was 2). The provider keeps every exact listing plus the 30 most-stocked similar rows.
+- **Look for download** skips files already used this session (`cse.file_key`). An `.epw` now follows the watcher's auto-import decision instead of always auto-importing (`_cse_fetch(epw, auto)`).
+- **`same_maker`** now uses a whole-name prefix ("ON Semiconductor" = "onsemi") or a distinctive key word of at least 4 letters that is not a place name. So "ON Semiconductor" ≠ "ON Shine" and "Shenzhen X" ≠ "Shenzhen Y". Accents are ASCII-folded.
+- **Finish fallback:** if the check/refresh run fails, a close-only finish (`FootprintCount=0`) runs so the hidden libraries are closed; a separate warning appears if even that fails.
+- **Minor:** the LCSC # field now follows the most-stocked pick; the "No API key" status text is gone; the disabled entry style is fixed.
+- **Verified:** 101 unit tests pass. The exe 1.4.1 starts.
+
 ## 2026-11-20 — v1.4.0: Search from LCSC (no key), Mouser API removed ✅
 - **Request:** remove the Mouser API key and Mouser search, and search LCSC instead (the user has LCSC's permission), so others don't need a key.
 - **Provider:** `alm/providers/lcsc.py` uses the LCSC/JLCPCB public parts search (see `lcsc_lookup.fetch`). Each listing gives MPN, manufacturer (`ADI(Analog Devices)` → `Analog Devices`), package, stock, description, datasheet (the official link first, https only), LCSC page and C-number. Results are sorted by stock, so the best exact match is the most-stocked listing.

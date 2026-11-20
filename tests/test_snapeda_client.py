@@ -129,6 +129,32 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(c.file_url(2), "https://s3.example/x.IntLib")
         self.assertEqual(sc.SnapClient("u", "p", session="bad;cookie").session, "")
 
+    def test_restored_session_gets_token_from_home_page(self):
+        c = sc.SnapClient("u", "p", session="abc123def456")
+        cookies = {}
+        c._cookie = lambda name: cookies.get(name, "")
+        seen = []
+
+        def req(url, data=None, headers=None, allow_redirect=False):
+            seen.append(url.replace(sc.BASE, ""))
+            if url.endswith(sc.LOGIN_PATH):          # signed in: SnapEDA redirects
+                return 301, Headers(Location="/home/"), b""
+            if url.endswith(sc.HOME_PATH):
+                cookies["csrftoken"] = "tok"
+                return 200, Headers(), b"<html></html>"
+            self.assertEqual(headers["X-CSRFToken"], "tok")
+            return 200, Headers(), json.dumps(SEARCH).encode()
+        c._request = req
+        self.assertEqual(len(c.search("CRCW08051R00FNEB")), 3)
+        self.assertEqual(seen[:2], [sc.LOGIN_PATH, sc.HOME_PATH])
+
+    def test_login_page_redirect_without_session_is_an_error(self):
+        self.c._request = lambda url, data=None, headers=None, allow_redirect=False: (
+            301, Headers(Location="/home/"), b"")
+        self.cookies.pop("csrftoken")
+        with self.assertRaises(sc.SnapError):
+            self.c.search("X")
+
     def test_intlib_download_and_names(self):
         self.assertEqual(sc.library_filename("https://s3.x/a/CRCW.IntLib?sig=1", 5), "CRCW.IntLib")
         self.assertEqual(sc.library_filename("https://s3.x/a/evil.exe", 5), "")

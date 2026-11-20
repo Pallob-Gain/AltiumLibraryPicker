@@ -147,8 +147,8 @@ def finish_values(req: ImportRequest, prep: bridge.ImportReport,
 
 
 def _finish(req, prep, report, x2, work_dir, timeout) -> None:
+    values = finish_values(req, prep, report)
     try:
-        values = finish_values(req, prep, report)
         fin = bridge.run_job(x2, work_dir, values, timeout)
         if fin.flags.get("REFRESHED") == "1":
             # a footprint was not found: Altium's library refresh ran (applied once that run
@@ -158,13 +158,29 @@ def _finish(req, prep, report, x2, work_dir, timeout) -> None:
             fin = bridge.run_job(x2, work_dir, {**values, "Refresh": "0"}, timeout)
         report.cache = fin.cache
         report.warnings += fin.errors + fin.warnings
+    except bridge.AltiumError as e:
+        report.warnings.append(f"Could not check Altium's library search: {e}")
+        # the import's libraries may still be loaded (hidden) in Altium - showing or saving that
+        # copy breaks new footprints (see DoFinish), so close them without checking again
+        try:
+            time.sleep(1.5)
+            closed = bridge.run_job(x2, work_dir, {**values, "Refresh": "0",
+                                                   "FootprintCount": "0"}, timeout)
+            report.warnings += closed.errors + closed.warnings
+        except bridge.AltiumError as e2:
+            report.warnings.append(
+                f"Could not close the libraries in Altium ({e2}). Restart Altium WITHOUT saving "
+                f"{Path(req.dest_schlib).name} / {Path(req.dest_pcblib).name} - the import is "
+                "already saved on disk.")
+            return
+    try:
         if "1" in (values["ReopenSch"], values["ReopenPcb"]):
             # reopen FROM DISK in a new run, once Altium has finished closing (see DoFinish)
             time.sleep(1.5)
             again = bridge.run_job(x2, work_dir, {**values, "Action": "reopen"}, timeout)
             report.warnings += again.errors + again.warnings
     except bridge.AltiumError as e:
-        report.warnings.append(f"Could not check Altium's library search / reopen libraries: {e}")
+        report.warnings.append(f"Could not reopen the libraries in Altium: {e}")
 
 
 def record_import(db, req: ImportRequest, report: bridge.ImportReport) -> None:

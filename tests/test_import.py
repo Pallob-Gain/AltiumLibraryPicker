@@ -143,6 +143,27 @@ class JobTests(TmpCase):
         self.assertTrue(rep.cache_ok)
         self.assertIn("finds footprint FP1", rep.summary())
 
+    def test_finish_closes_libraries_when_the_check_run_fails(self):
+        req = ImportRequest("a", "b", "c.SchLib", "d.PcbLib")
+        prep = bridge.parse_result("STATUS=OK\nPCB_WAS_OPEN=1\nEND=1")
+        rep = bridge.parse_result(RESULT_OK)
+        sent = []
+
+        def fake_run(x2, work, values, timeout):
+            sent.append(dict(values))
+            if len(sent) == 1:
+                return bridge.parse_result("STATUS=OK\nVERIFY_CACHE=FP1|not found\n"
+                                           "REFRESHED=1\nEND=1")
+            if len(sent) == 2:
+                raise bridge.AltiumError("No answer from Altium")
+            return bridge.parse_result("STATUS=OK\nEND=1")
+        with mock.patch.object(importer.bridge, "run_job", side_effect=fake_run), \
+                mock.patch.object(importer.time, "sleep"):
+            importer._finish(req, prep, rep, Path("x2"), Path("w"), 10)
+        self.assertEqual([(v["Action"], v["Refresh"], v["FootprintCount"]) for v in sent][2:],
+                         [("finish", "0", "0"), ("reopen", "1", "1")])   # close only, reopen
+        self.assertTrue(any("No answer" in w for w in rep.warnings))
+
     def test_validate_rejects_same_file(self):
         sch = make_lib(self.dir / "a.SchLib")
         pcb = make_lib(self.dir / "a.PcbLib")

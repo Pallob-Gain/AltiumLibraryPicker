@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import urllib.request
 from dataclasses import dataclass
 
@@ -20,7 +21,7 @@ SEARCH_URL = ("https://jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/131.0.0.0 Safari/537.36")
 MAX_REPLY = 2_000_000
-PAGE_SIZE = 25
+PAGE_SIZE = 100                 # exact listings can be far down for common MPNs (LM358)
 _CODE = re.compile(r"^C\d{1,10}$")
 
 
@@ -97,14 +98,38 @@ def parse_results(reply: dict, mpn: str) -> list[LcscPart]:
 
 
 def _words(name: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", (name or "").lower())
+    ascii_name = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode()
+    return re.findall(r"[a-z0-9]+", ascii_name.lower())
+
+
+# place names etc. that start many unrelated company names ("Shenzhen Fuman", "Shenzhen Slkor")
+_GENERIC = {"shenzhen", "guangdong", "guangzhou", "dongguan", "jiangsu", "zhejiang", "shanghai",
+            "beijing", "hangzhou", "wuxi", "suzhou", "xiamen", "china", "the", "international",
+            "global"}
+
+
+def _key_word(words: list[str]) -> str:
+    """The distinctive word of a company name: the first one that isn't generic and has at
+    least 4 letters ('ON', 'TI', 'ST' alone are too short to identify a company)."""
+    for w in words:
+        if w not in _GENERIC:
+            return w if len(w) >= 4 else ""
+    return ""
 
 
 def same_maker(a: str, b: str) -> bool:
-    """'Vishay Dale' = 'Vishay Intertech', 'Analog Devices Inc.' = 'ADI(Analog Devices)':
-    the first word of either name appears among the other's words."""
+    """True for two spellings of one company:
+    'Vishay Dale' = 'Vishay Intertech', 'Microchip Tech' = 'Microchip Technology',
+    'ON Semiconductor' = 'onsemi', 'Würth Elektronik' = 'Wurth Elektronik';
+    but 'ON Semiconductor' != 'ON Shine' and 'Shenzhen Fuman' != 'Shenzhen Slkor'."""
     wa, wb = _words(a), _words(b)
-    return bool(wa and wb) and (wa[0] in wb or wb[0] in wa)
+    if not (wa and wb):
+        return False
+    ja, jb = "".join(wa), "".join(wb)
+    if min(len(ja), len(jb)) >= 3 and (ja.startswith(jb) or jb.startswith(ja)):
+        return True
+    ka, kb = _key_word(wa), _key_word(wb)
+    return bool(ka and ka in wb) or bool(kb and kb in wa)
 
 
 def pick(parts: list[LcscPart], manufacturer: str = "") -> list[LcscPart]:

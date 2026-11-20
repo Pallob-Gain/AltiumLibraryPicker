@@ -141,9 +141,17 @@ def _readable(path: Path) -> bool:
         return False
 
 
-def recent_download(folder: Path, mpn: str, max_age: float, clock=time.time) -> WatchStatus | None:
+def file_key(path: Path) -> tuple[str, int, int]:
+    """Identifies one downloaded file (name, size, modification time) - see recent_download."""
+    st = os.stat(path)
+    return (Path(path).name.lower(), st.st_size, int(st.st_mtime))
+
+
+def recent_download(folder: Path, mpn: str, max_age: float, clock=time.time,
+                    used: set | frozenset = frozenset()) -> WatchStatus | None:
     """A finished library download saved in the last `max_age` seconds ('ready' status), or None.
-    Files named after the MPN win, then the newest. Files still being downloaded are skipped."""
+    Files named after the MPN win, then the newest. Files still being downloaded are skipped,
+    and so are files already used (`used` holds their file_key)."""
     now = clock()
     try:
         with os.scandir(folder) as it:
@@ -157,6 +165,8 @@ def recent_download(folder: Path, mpn: str, max_age: float, clock=time.time) -> 
         if not low.endswith(ACCEPTED) or st.st_size <= 0 or now - st.st_mtime > max_age:
             continue
         if any(low + suf in names for suf in PARTIAL):        # browser still writing it
+            continue
+        if (low, st.st_size, int(st.st_mtime)) in used:        # already imported/loaded
             continue
         key = (name_matches(name, mpn), st.st_mtime)
         if best is None or key > best[0]:

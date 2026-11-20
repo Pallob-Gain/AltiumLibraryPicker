@@ -38,6 +38,7 @@ from pathlib import Path
 HOST = "www.snapeda.com"
 BASE = f"https://{HOST}"
 LOGIN_PATH = "/account/login/"
+HOME_PATH = "/home/"
 SEARCH_URL = f"{BASE}/api/v1/search_local_internal"
 PART_URL = f"{BASE}/api/get_part_for_unipart/{{}}"
 ALTIUM_FORMAT = "altium_native"
@@ -224,8 +225,12 @@ class SnapClient:
         return tok
 
     def _login_page(self) -> str:
-        status, _, body = self._request(BASE + LOGIN_PATH, headers={
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
+        html_accept = {"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+        status, _, body = self._request(BASE + LOGIN_PATH, headers=html_accept)
+        if 300 <= status < 400 and self._logged_in:
+            # restored session: SnapEDA sends a signed-in user from the login page to /home/
+            # (301, verified 2026-11-20); that page sets the csrftoken cookie too
+            status, _, body = self._request(BASE + HOME_PATH, headers=html_accept)
         if status != 200:
             raise SnapError(f"SnapEDA login page answered HTTP {status}.")
         html = body.decode("utf-8", "replace")
