@@ -141,6 +141,31 @@ def _readable(path: Path) -> bool:
         return False
 
 
+def recent_download(folder: Path, mpn: str, max_age: float, clock=time.time) -> WatchStatus | None:
+    """A finished library download saved in the last `max_age` seconds ('ready' status), or None.
+    Files named after the MPN win, then the newest. Files still being downloaded are skipped."""
+    now = clock()
+    try:
+        with os.scandir(folder) as it:
+            entries = [(e.name, e.stat()) for e in it if e.is_file()]
+    except OSError:
+        return None
+    names = {n.lower() for n, _ in entries}
+    best = None
+    for name, st in entries:
+        low = name.lower()
+        if not low.endswith(ACCEPTED) or st.st_size <= 0 or now - st.st_mtime > max_age:
+            continue
+        if any(low + suf in names for suf in PARTIAL):        # browser still writing it
+            continue
+        key = (name_matches(name, mpn), st.st_mtime)
+        if best is None or key > best[0]:
+            best = (key, name, st.st_size)
+    if best is None or not _readable(Path(folder) / best[1]):
+        return None
+    return WatchStatus("ready", Path(folder) / best[1], best[2], best[0][0])
+
+
 def claim(path: Path, work_dir: Path) -> Path:
     """Copy the finished download into the app's own folder right away (the official Library
     Loader may move files out of Downloads), and return the copy."""

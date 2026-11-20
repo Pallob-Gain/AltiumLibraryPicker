@@ -10,6 +10,22 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-20 — v1.3.0: From Ultra Librarian (browser download, automatic import) ⏳ needs a real download test
+- **Request:** Ultra Librarian like SnapEDA, for the 3D model, with the CAPTCHA automated or bypassed.
+- **Decision:** the app does NOT solve or bypass Ultra Librarian's reCAPTCHA. The adom chip-fetcher playbook we were pointed to drives a browser and solves the image challenges with AI vision and anti-detection tricks. That defeats the site's human check, so it is not in scope. Ultra Librarian has no public download API.
+- **Built:** the button **From Ultra Librarian…** reuses the tested Download-folder watcher (as for CSE and Mouser). It opens `app.ultralibrarian.com/search?queryText=<MPN>` in the user's browser. The user signs in there once (Remember My Login, about 30 days), picks Altium Designer + STEP, and ticks the CAPTCHA. The app then picks up `ul_<MPN>.zip` and imports it automatically. A single STEP is attached at the footprint origin if the footprint has no 3D body.
+- **App login:** no Ultra Librarian password is stored in the app. The login lives in the browser, which is the only place it is used.
+- **Look for download** replaces the **From Mouser** and **From Component Search Engine** buttons (user request). It first checks the download folder for a library file saved in the last 30 minutes (`cse.recent_download`). A file whose name contains the MPN is preferred and imported automatically; any other file is only loaded as the source. If nothing is found, it waits for the next download, like the Ultra Librarian button. CSE `.epw` files still work.
+- **LCSC Part # from the MPN** (`alm/lcsc_lookup.py`): Search also asks JLCPCB's public parts search (`selectSmtComponentList`, an undocumented service, no login), in parallel with the providers. Only listings with an EXACT MPN (`normalize_mpn`) and the same manufacturer (first word of either name, e.g. Vishay Dale = Vishay Intertech) are used; the one with the most stock wins. This fills **LCSC Part #** if it is empty, plus the EasyEDA LCSC box. A failure is only a note in Messages. Live check: RP2040→C2040, NE555DR→C7593, CRCW08051R00FNEB→C3924188, MCP23017T-E/ML→C629439, unknown part→none.
+- **Verified:** 98 unit tests pass. In an offscreen window check, the buttons are correct, the LCSC fill works, Look for download finds a recent zip, and waiting starts and stops.
+- **Then (user request):**
+  - **SamacSys:** the "From SamacSys library" button and its code are removed.
+  - **Logins label:** shows only site names ("Logins: CSE, SnapEDA, Ultra Librarian"), never an email, and sits at the right of the status bar.
+  - **Ultra Librarian login:** a Settings dialog with DPAPI keys `ul_email`/`ul_password`, a "Use my SnapEDA login" button, "Open sign-in page" (which copies the email), and Copy email / Copy password. A copied password is removed from the clipboard after 30 s. When From Ultra Librarian is clicked, Messages shows Copy buttons. The app never sends this login anywhere; `app.ultralibrarian.com/account/login` was checked and redirects to UL's SSO sign-in.
+  - **Look:** a minimal light theme (`alm/ui/theme.py`, ttk "clam"): neutral greys, white fields, quiet message colours, and one muted blue only on Search and Import into Altium.
+  - **README:** rewritten for beginners (setup, a first-part walkthrough, which button to use, undo, FAQ) with a new screenshot. LCSC lookup permission confirmed by the user.
+- **Not yet verified:** the layout of a real `ul_*.zip` (libraries plus STEP), and whether the STEP sits correctly at the origin.
+
 ## 2026-11-20 — v1.2.0: Get from SnapEDA (direct) ✅
 
 - **What:** a **Get from SnapEDA (direct)** button: exact-MPN search, sign-in, Altium download, import. Login under **Settings → SnapEDA…** (DPAPI-encrypted, like CSE). The user stated they have permission to download from SnapEDA this way.

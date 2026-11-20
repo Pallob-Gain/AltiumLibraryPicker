@@ -15,7 +15,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .. import __version__
+from .. import __version__, lcsc_lookup
 from ..altium import bridge
 from ..config import Settings, app_dir
 from ..credentials import CredentialStore
@@ -25,7 +25,8 @@ from ..models import ProviderState
 from ..providers.links import ALTIUM_MPS_HELP, MANUAL_SOURCES
 from ..providers.mouser import CRED_NAME as MOUSER_CRED
 from ..search import SearchOutcome, run_search
-from ..cse import CSE_HOME, DownloadWatcher, claim, default_downloads_dir, human_size
+from ..cse import (CSE_HOME, DownloadWatcher, claim, default_downloads_dir, human_size,
+                   recent_download)
 from ..cse_client import (CRED_EMAIL, CRED_PASSWORD, CseAuthError, CseClient, CseError,
                           exact_matches, parse_epw, read_epw)
 from ..snapeda_client import (CRED_PASSWORD as SNAP_PASSWORD, CRED_SESSION as SNAP_SESSION,
@@ -36,24 +37,37 @@ from ..easyeda.fetch import UNOFFICIAL_NOTE, clean_lcsc, fetch_and_build
 from ..schlib_reader import best_match, list_symbols
 from ..sources import resolve_source
 from ..validation import check_library
+from . import theme
+
+# Ultra Librarian login: kept for the person to paste into the sign-in page in their browser
+# (the download itself needs the site's "I'm not a robot" check, so it happens there)
+UL_EMAIL, UL_PASSWORD = "ul_email", "ul_password"
+UL_LOGIN_URL = "https://app.ultralibrarian.com/account/login"
+CLIPBOARD_CLEAR_MS = 30_000
 
 ALL_COMPONENTS = "(all components)"
 # browser sites whose ECAD download is picked up from the Downloads folder:
 # key -> (button text, what to click on the site)
 WATCH_SITES = {
-    "cse": ("From Component Search Engine (CSE)...",
-            "Open the part and click its download button (ECAD model)."),
-    "mouser_web": ("From Mouser (ECAD model)...",
-                   "Open the part and click the ECAD Model icon (SamacSys symbol, footprint, 3D) "
-                   "- sign in with your Component Search Engine account if Mouser asks."),
+    # Ultra Librarian shows a reCAPTCHA before every download, so the person does the download
+    # in their own browser (signed in there, "Remember My Login") and the app imports the zip.
+    "ultralibrarian": ("From Ultra Librarian...",
+                       "Open the part (sign in once, tick 'Remember My Login'), click Download "
+                       "Now, choose 'Altium Designer' and 'STEP', accept the terms, tick "
+                       "'I'm not a robot' and click Download Now again."),
+    # no site: use a library zip already downloaded (last 30 min), else wait for the next one
+    "download": ("Look for download",
+                 "Download the part's library zip in your browser from any site "
+                 "(Mouser, CSE, Ultra Librarian, SnapEDA, manufacturer...)."),
 }
+RECENT_DOWNLOAD_SECS = 30 * 60
 
 log = logging.getLogger(__name__)
 
 RESULT_COLUMNS = [  # id, heading, width
     ("match", "Match", 135), ("mpn", "MPN", 170), ("mfr", "Manufacturer", 150),
-    ("source", "Source", 70), ("symbol", "Symbol", 55), ("footprint", "Footprint", 65),
-    ("model3d", "3D", 40), ("datasheet", "Datasheet", 65), ("supplier_pn", "Supplier P/N", 130),
+    ("source", "Source", 70), ("symbol", "Symbol", 66), ("footprint", "Footprint", 80),
+    ("model3d", "3D", 40), ("datasheet", "Datasheet", 88), ("supplier_pn", "Supplier P/N", 130),
 ]
 PARAM_FIELDS = ["Manufacturer", "Manufacturer Part Number", "Description", "Datasheet", "LCSC Part #"]
 LINK_MODES = {"Library file name (recommended)": "name", "Full library path": "path",
@@ -70,6 +84,7 @@ class App:
         self.outcome: SearchOutcome | None = None
         self.work_dir = app_dir()
         self._watcher: DownloadWatcher | None = None
+        self._watch_auto = False        # import what the watcher finds automatically
         self._auto_import_next = False
         self._progress_text = ""
         self._step_file = ""
@@ -78,8 +93,10 @@ class App:
         self._cse_login = (creds.get(CRED_EMAIL), creds.get(CRED_PASSWORD))
         self._snap_login = (creds.get(SNAP_USER), creds.get(SNAP_PASSWORD))
         self._snap: SnapClient | None = None     # signed-in SnapEDA session (memory only)
+        self._ul_login = (creds.get(UL_EMAIL), creds.get(UL_PASSWORD))
         self._queue: queue.Queue = queue.Queue()
         self._busy = False
+        theme.apply(root)
         self._build()
 
     # ================= layout =================
@@ -97,101 +114,108 @@ class App:
         m.add_command(label="API keys...", command=self._api_keys_dialog)
         m.add_command(label="Component Search Engine...", command=self._cse_dialog)
         m.add_command(label="SnapEDA...", command=self._snap_dialog)
+        m.add_command(label="Ultra Librarian...", command=self._ul_dialog)
+        m.add_separator()
         m.add_command(label="Open data folder (backups, logs)",
                       command=lambda: os.startfile(self.work_dir))
         menubar.add_cascade(label="Settings", menu=m)
         r.config(menu=menubar)
 
         # ---- 1. Search ----
-        top = ttk.LabelFrame(r, text="1. Part number", padding=6)
-        top.pack(fill="x", padx=8, pady=(8, 4))
+        top = ttk.LabelFrame(r, text="1. Part number", padding=8)
+        top.pack(fill="x", padx=12, pady=(10, 6))
         self.mpn_var = tk.StringVar(value=self.settings.get("last_mpn", ""))
         entry = ttk.Entry(top, textvariable=self.mpn_var, width=40, font=("Segoe UI", 11))
         entry.pack(side="left")
         entry.bind("<Return>", lambda e: self.on_search())
         entry.focus_set()
-        self.search_btn = ttk.Button(top, text="Search", command=self.on_search)
-        self.search_btn.pack(side="left", padx=6)
-        self.search_info = ttk.Label(top, text="", foreground="#555")
+        self.search_btn = ttk.Button(top, text="Search", style="Accent.TButton",
+                                     command=self.on_search)
+        self.search_btn.pack(side="left", padx=8)
+        self.search_info = ttk.Label(top, text="", style="Muted.TLabel")
         self.search_info.pack(side="left", padx=6)
 
         # ---- 2. Results + library sites ----
         mid = ttk.Frame(r)
         # packed at the end of _build (bottom-up) so a short window shrinks the results table
         res = ttk.LabelFrame(mid, text="2. Search results (double-click opens the source page)",
-                             padding=6)
+                             padding=8)
         res.pack(side="left", fill="both", expand=True)
         self.tree = ttk.Treeview(res, columns=[c[0] for c in RESULT_COLUMNS], show="headings",
                                  height=4, selectmode="browse")
         for cid, head, width in RESULT_COLUMNS:
             self.tree.heading(cid, text=head)
             self.tree.column(cid, width=width, stretch=cid in ("mfr", "mpn"))
-        self.tree.tag_configure("exact", background="#e3f6e3")
-        self.tree.tag_configure("similar", background="#fff1d6")
+        self.tree.tag_configure("exact", background=theme.ROW_EXACT)
+        self.tree.tag_configure("similar", background=theme.ROW_SIMILAR)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda e: self._open_selected("source_url"))
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._use_selected_result())
         rb = ttk.Frame(res)
-        rb.pack(fill="x", pady=(4, 0))
+        rb.pack(fill="x", pady=(6, 0))
         ttk.Button(rb, text="Open source page",
                    command=lambda: self._open_selected("source_url")).pack(side="left")
         ttk.Button(rb, text="Open datasheet",
                    command=lambda: self._open_selected("datasheet_url")).pack(side="left", padx=4)
 
-        sites = ttk.LabelFrame(mid, text="Find a library (opens the site's search page)", padding=6)
-        sites.pack(side="left", fill="y", padx=(8, 0))
+        sites = ttk.LabelFrame(mid, text="Find a library (opens the site's search page)", padding=8)
+        sites.pack(side="left", fill="y", padx=(10, 0))
         # two columns so it fits short screens
         for i, src in enumerate(MANUAL_SOURCES):
             label = "CSE (SamacSys)" if src.key == "cse" else src.name
-            ttk.Button(sites, text=label, width=17,
+            ttk.Button(sites, text=label, width=16, style="Small.TButton",
                        command=lambda s=src: self._open_site(s)).grid(
                 row=i // 2, column=i % 2, sticky="ew", padx=1, pady=1)
-        last = (len(MANUAL_SOURCES) + 1) // 2
-        ttk.Button(sites, text="Altium Manufacturer Part Search",
+        n = len(MANUAL_SOURCES)
+        all_btn = ttk.Button(sites, text="Open ALL sites", style="Small.TButton",
+                             command=self._open_all_sites)
+        if n % 2:                                   # fill the free cell of the last row
+            all_btn.grid(row=n // 2, column=1, sticky="ew", padx=1, pady=1)
+            last = n // 2 + 1
+        else:
+            all_btn.grid(row=n // 2, column=0, columnspan=2, sticky="ew", padx=1, pady=1)
+            last = n // 2 + 1
+        ttk.Button(sites, text="Altium Manufacturer Part Search", style="Small.TButton",
                    command=self._altium_mps).grid(row=last, column=0, columnspan=2,
                                                   sticky="ew", padx=1, pady=1)
-        ttk.Button(sites, text="Open ALL sites", command=self._open_all_sites).grid(
-            row=last + 1, column=0, columnspan=2, sticky="ew", padx=1, pady=(6, 0))
 
         # ---- 3. Import ----
-        imp = ttk.LabelFrame(r, text="3. Import into Altium", padding=6)
+        imp = ttk.LabelFrame(r, text="3. Import into Altium", padding=8)
         # (packed at the end of _build)
         imp.columnconfigure(1, weight=1)
-        ttk.Label(imp, text="Downloaded library:").grid(row=0, column=0, sticky="w")
-        bf = ttk.Frame(imp)
-        bf.grid(row=0, column=1, columnspan=2, sticky="w", pady=(0, 4))
-        ttk.Button(bf, text="Select file (SchLib / PcbLib / IntLib / LibPkg / zip)...",
-                   command=self._pick_download_file).pack(side="left")
-        ttk.Button(bf, text="Select folder...", command=self._pick_download_folder).pack(
-            side="left", padx=4)
-
-        ttk.Label(imp, text="Get it automatically:").grid(row=1, column=0, sticky="w")
+        ttk.Label(imp, text="Get the part:").grid(row=0, column=0, sticky="w")
         af = ttk.Frame(imp)
-        af.grid(row=1, column=1, columnspan=2, sticky="w", pady=(0, 4))
+        af.grid(row=0, column=1, columnspan=2, sticky="ew", pady=(0, 6))
         self.cse_direct_btn = ttk.Button(af, text="Get from CSE (direct)",
                                          command=self._cse_direct)
         self.cse_direct_btn.pack(side="left", padx=(0, 4))
         ttk.Button(af, text="Get from SnapEDA (direct)", command=self._snap_direct).pack(
             side="left", padx=(0, 4))
-        self.mouser_btn = ttk.Button(af, text=WATCH_SITES["mouser_web"][0],
-                                     command=lambda: self._cse_toggle("mouser_web"))
-        self.mouser_btn.pack(side="left")
-        self.cse_btn = ttk.Button(af, text=WATCH_SITES["cse"][0],
-                                  command=lambda: self._cse_toggle("cse"))
-        self.cse_btn.pack(side="left", padx=(4, 2))
-        self._site_btns = {"cse": self.cse_btn, "mouser_web": self.mouser_btn}
-        self.cse_login_var = tk.StringVar()
-        ttk.Label(af, textvariable=self.cse_login_var, foreground="#555").pack(side="left",
-                                                                                padx=(0, 6))
-        ttk.Button(af, text="From SamacSys library...", command=self._from_samacsys).pack(
-            side="left")
-        ttk.Label(af, text="    EasyEDA by LCSC #:").pack(side="left")
+        ttk.Separator(af, orient="vertical").pack(side="left", fill="y", padx=8, pady=2)
+        self.ul_btn = ttk.Button(af, text=WATCH_SITES["ultralibrarian"][0],
+                                 command=lambda: self._cse_toggle("ultralibrarian"))
+        self.ul_btn.pack(side="left", padx=(0, 4))
+        self.look_btn = ttk.Button(af, text=WATCH_SITES["download"][0],
+                                   command=lambda: self._cse_toggle("download"))
+        self.look_btn.pack(side="left")
+        self._site_btns = {"ultralibrarian": self.ul_btn, "download": self.look_btn}
+        ttk.Separator(af, orient="vertical").pack(side="left", fill="y", padx=8, pady=2)
+        ttk.Label(af, text="EasyEDA by LCSC #").pack(side="left")
         self.lcsc_var = tk.StringVar()
         lcsc_entry = ttk.Entry(af, textvariable=self.lcsc_var, width=10)
         lcsc_entry.pack(side="left", padx=4)
         lcsc_entry.bind("<Return>", lambda e: self._fetch_lcsc())
         self.lcsc_btn = ttk.Button(af, text="Fetch", command=self._fetch_lcsc)
         self.lcsc_btn.pack(side="left")
+        self.cse_login_var = tk.StringVar()       # which logins are saved (names only)
+
+        ttk.Label(imp, text="Or a file:").grid(row=1, column=0, sticky="w")
+        bf = ttk.Frame(imp)
+        bf.grid(row=1, column=1, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Button(bf, text="Select file (zip, IntLib, SchLib, PcbLib, LibPkg)...",
+                   command=self._pick_download_file).pack(side="left")
+        ttk.Button(bf, text="Select folder...", command=self._pick_download_folder).pack(
+            side="left", padx=4)
 
         self.src_sch = tk.StringVar()
         self.src_pcb = tk.StringVar()
@@ -215,8 +239,8 @@ class App:
         self.src_sch.trace_add("write", lambda *a: self._refresh_components())
 
         pf = ttk.LabelFrame(imp, text="Component parameters (blank = keep library value; "
-                                      "'LCSC Part #' is always created)", padding=4)
-        pf.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+                                      "'LCSC Part #' is always created)", padding=8)
+        pf.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         self.param_vars: dict[str, tk.StringVar] = {}
         for i, name in enumerate(PARAM_FIELDS):
             var = tk.StringVar()
@@ -229,7 +253,7 @@ class App:
         pf.columnconfigure(3, weight=1)
 
         of = ttk.Frame(imp)
-        of.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        of.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         ttk.Label(of, text="If the name already exists:").pack(side="left")
         self.conflict_var = tk.StringVar(value=self.settings.get("on_conflict", "skip"))
         ttk.Radiobutton(of, text="Skip (never overwrite)", value="skip",
@@ -242,31 +266,33 @@ class App:
             (k for k, v in LINK_MODES.items() if v == current), list(LINK_MODES)[0]))
         ttk.Combobox(of, textvariable=self.link_var, values=list(LINK_MODES), state="readonly",
                      width=30).pack(side="left", padx=4)
-        self.import_btn = ttk.Button(of, text="Import into Altium", command=self.on_import)
+        self.import_btn = ttk.Button(of, text="Import into Altium", style="Accent.TButton",
+                                     command=self.on_import)
         self.import_btn.pack(side="right")
 
         # ---- Messages ----
-        msg = ttk.LabelFrame(r, text="Messages", padding=4)
+        msg = ttk.LabelFrame(r, text="Messages", padding=8)
         # (packed at the end of _build)
-        self.info = tk.Text(msg, height=9, wrap="word", font=("Segoe UI", 9))
+        self.info = tk.Text(msg, height=9, wrap="word")
+        theme.style_text(self.info)
         sb = ttk.Scrollbar(msg, orient="vertical", command=self.info.yview)
         self.info.configure(yscrollcommand=sb.set)
         self.info.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
-        self.info.tag_configure("bold", font=("Segoe UI", 9, "bold"))
-        self.info.tag_configure("warn", foreground="#a05a00")
-        self.info.tag_configure("err", foreground="#b00020")
-        self.info.tag_configure("ok", foreground="#1b7a1b")
-        self._set_info([("Paste an MPN and press Search, or go straight to step 3 with a library "
-                         "you already downloaded.", "")])
+        self._set_info([("Paste a part number and press Search, or go straight to step 3 with "
+                         "a library you already downloaded.", "")])
 
         self._cse_update_login_label()
         self.status_var = tk.StringVar(value="Ready.")
-        ttk.Label(r, textvariable=self.status_var, relief="sunken", anchor="w",
-                  padding=(6, 2)).pack(fill="x", side="bottom")
-        msg.pack(side="bottom", fill="both", padx=8, pady=(0, 4))
-        imp.pack(side="bottom", fill="x", padx=8, pady=4)
-        mid.pack(fill="both", expand=True, padx=8)
+        bar = ttk.Frame(r, style="Card.TFrame")
+        bar.pack(fill="x", side="bottom")
+        ttk.Label(bar, textvariable=self.cse_login_var, style="Status.TLabel").pack(side="right")
+        ttk.Label(bar, textvariable=self.status_var, anchor="w", style="Status.TLabel").pack(
+            side="left", fill="x", expand=True)
+        ttk.Separator(r).pack(fill="x", side="bottom")
+        msg.pack(side="bottom", fill="both", padx=12, pady=(0, 10))
+        imp.pack(side="bottom", fill="x", padx=12, pady=6)
+        mid.pack(fill="both", expand=True, padx=12)
 
     # ================= background tasks =================
     def _run_bg(self, label: str, func, on_done) -> None:
@@ -316,8 +342,53 @@ class App:
             self.status_var.set("Enter a manufacturer part number.")
             return
         self.settings.set("last_mpn", mpn)
-        self._run_bg(f"Searching '{mpn}'...",
-                     lambda: run_search(mpn, self.providers, MANUAL_SOURCES), self._show_outcome)
+
+        def task():
+            box: dict = {}
+
+            def lcsc():                      # in parallel with the provider search
+                try:
+                    box["parts"] = lcsc_lookup.search(mpn)
+                except Exception as e:       # never stops the search
+                    log.warning("LCSC lookup failed: %s", e)
+                    box["error"] = str(e)
+            t = threading.Thread(target=lcsc, daemon=True)
+            t.start()
+            outcome = run_search(mpn, self.providers, MANUAL_SOURCES)
+            t.join(20)
+            return outcome, box
+
+        self._run_bg(f"Searching '{mpn}'...", task,
+                     lambda res: (self._show_outcome(res[0]), self._show_lcsc(res[0], res[1])))
+
+    def _show_lcsc(self, o: SearchOutcome, box: dict) -> None:
+        """Fill 'LCSC Part #' (and the EasyEDA box) from an exact-MPN JLCPCB/LCSC listing."""
+        if "error" in box:
+            self._append_info([(f"LCSC Part #: lookup failed - {box['error']}\n", "warn")])
+            return
+        parts = box.get("parts")
+        if parts is None:
+            self._append_info([("LCSC Part #: lookup did not answer in time.\n", "warn")])
+            return
+        maker = self.param_vars["Manufacturer"].get().strip()
+        best = lcsc_lookup.pick(parts, maker)
+        if not best:
+            if parts:
+                self._append_info([("LCSC Part #: not filled - LCSC lists "
+                                    + ", ".join(f"{p.code} ({p.manufacturer})" for p in parts[:4])
+                                    + f" under another manufacturer than '{maker}'.\n", "warn")])
+            else:
+                self._append_info([(f"LCSC Part #: {o.query} is not sold by LCSC.\n", "")])
+            return
+        top = best[0]
+        if not self.param_vars["LCSC Part #"].get().strip():
+            self.param_vars["LCSC Part #"].set(top.code)
+        self.lcsc_var.set(top.code)                 # ready for 'EasyEDA by LCSC #: Fetch'
+        line = (f"LCSC Part #: {top.code} ({top.manufacturer}"
+                + (f", {top.package}" if top.package else "") + f", stock {top.stock})")
+        if len(best) > 1:
+            line += " - other listings: " + ", ".join(p.code for p in best[1:5])
+        self._append_info([(line + "\n", "ok")])
 
     def _show_outcome(self, o: SearchOutcome) -> None:
         self.outcome = o
@@ -560,48 +631,64 @@ class App:
     def _cse_folder(self) -> Path:
         return Path(self.settings.get("cse_watch_dir") or default_downloads_dir())
 
-    def _cse_toggle(self, site: str = "cse") -> None:
+    def _cse_toggle(self, site: str) -> None:
+        """Ultra Librarian: open the site and wait for its zip. Look for download: use a library
+        downloaded in the last 30 minutes, else wait for the next one."""
         if self._watcher:
             self._cse_stop("Stopped waiting for the download.")
             return
-        mpn = self._current_mpn()
-        if not mpn:
-            return
+        if site == "download":
+            mpn = self.mpn_var.get().strip()
+        else:
+            mpn = self._current_mpn()
+            if not mpn:
+                return
         folder = self._cse_folder()
         if not folder.is_dir():
-            messagebox.showerror("Component Search Engine", f"Download folder not found:\n{folder}"
+            messagebox.showerror("Download folder", f"Download folder not found:\n{folder}"
                                  "\n\nSet it under Settings > Component Search Engine.",
                                  parent=self.root)
             return
-        auto = bool(self.settings.get("cse_auto_import", True))
-        if auto:
-            if check_library(self.dst_sch.get(), ".SchLib") or \
-                    check_library(self.dst_pcb.get(), ".PcbLib"):
-                messagebox.showerror("Component Search Engine", "Select the destination SchLib and "
-                                     "PcbLib first - the download is imported into them "
-                                     "automatically.", parent=self.root)
+        auto = bool(self.settings.get("cse_auto_import", True)) and not (
+            check_library(self.dst_sch.get(), ".SchLib")
+            or check_library(self.dst_pcb.get(), ".PcbLib"))
+        if site == "download":
+            found = recent_download(folder, mpn, RECENT_DOWNLOAD_SECS)
+            if found:
+                # an older file is imported automatically only if its name has the MPN
+                self.status_var.set(f"Found download: {found.path.name} "
+                                    f"({human_size(found.size)})")
+                self._cse_received(found, auto=auto and found.matches_mpn)
                 return
-        src = next(s for s in MANUAL_SOURCES if s.key == site)
-        webbrowser.open(src.url(mpn))
+        else:
+            src = next(s for s in MANUAL_SOURCES if s.key == site)
+            webbrowser.open(src.url(mpn))
         self._watcher = DownloadWatcher(folder, mpn)
+        self._watch_auto = auto
         for key, btn in self._site_btns.items():
             if key == site:
                 btn.configure(text="Stop waiting for the download")
             else:
                 btn.state(["disabled"])
-        signed_in = all(self._cse_login)
-        steps = [(f"{src.name} - opened in your browser for {mpn}\n", "bold"),
-                 (f"  1. {WATCH_SITES[site][1]}\n", ""),
-                 (f"  2. This app watches {folder}. A full library zip is imported directly; "
-                  "a Library Loader part file (.epw) makes the app download the model itself "
-                  + ("with your saved CSE login.\n" if signed_in else
-                     "- for that, sign in under Settings > Component Search Engine.\n"),
-                  "" if signed_in else "warn")]
+        if site == "download":
+            steps = [("No library download from the last 30 minutes in your download folder - "
+                      "waiting for one.\n", "bold"),
+                     (f"  1. {WATCH_SITES[site][1]}\n", "")]
+        else:
+            steps = [(f"{src.name} - opened in your browser for {mpn}\n", "bold"),
+                     (f"  1. {WATCH_SITES[site][1]}\n", "")]
+        steps.append((f"  2. This app watches {folder} and uses the library zip that arrives "
+                      "(symbol, footprint and 3D model if included).\n", ""))
         if auto:
             steps.append((f"  It is then imported automatically into:\n    {self.dst_sch.get()}\n"
                           f"    {self.dst_pcb.get()}\n  (backed up first, never overwrites "
                           "existing parts).\n", ""))
+        else:
+            steps.append(("  It is loaded as the source library; then click Import into "
+                          "Altium.\n", ""))
         self._set_info(steps)
+        if site == "ultralibrarian":
+            self._ul_copy_buttons()
         self._cse_poll()
 
     def _cse_stop(self, status: str) -> None:
@@ -626,7 +713,7 @@ class App:
         elif st.state == "downloading":
             self.status_var.set(f"{st.message}: {human_size(st.size)}")
         elif st.state == "timeout":
-            self._cse_stop("Component Search Engine: " + st.message + " Click the button to "
+            self._cse_stop(st.message + " Click the button to "
                            "try again.")
             return
         elif st.state == "ready":
@@ -635,14 +722,14 @@ class App:
             return
         self.root.after(1000, self._cse_poll)
 
-    def _cse_received(self, st) -> None:
+    def _cse_received(self, st, auto: bool | None = None) -> None:
         try:
             copy = claim(st.path, self.work_dir)
         except OSError as e:
-            messagebox.showerror("Component Search Engine",
+            messagebox.showerror("Download",
                                  f"Could not read {st.path}:\n{e}\n\nIf the SamacSys Library Loader "
-                                 "is running it may have moved the file - use 'From SamacSys "
-                                 "library...' instead.", parent=self.root)
+                                 "is running it may have moved the file - close it, or use "
+                                 "'Get from CSE (direct)' instead.", parent=self.root)
             return
         try:
             epw = read_epw(copy)
@@ -655,7 +742,7 @@ class App:
         if not st.matches_mpn:
             self.status_var.set(f"Note: {st.path.name} does not contain the MPN in its name - "
                                 "check the component.")
-        self._auto_import_next = bool(self.settings.get("cse_auto_import", True))
+        self._auto_import_next = self._watch_auto if auto is None else auto
         self._load_download(copy)
 
     # ---- CSE direct: search by MPN -> download -> import (no browser) ----
@@ -688,8 +775,8 @@ class App:
                 [(f"Component Search Engine has no exact {mpn} with a symbol and footprint.\n",
                   "warn")]
                 + ([("  Similar, NOT the same part: " + ", ".join(near) + "\n", "")] if near else [])
-                + [("  Try: From Mouser (ECAD model), Ultra Librarian / SnapMagic (Find a library "
-                    "buttons), EasyEDA by LCSC #, or the Celestial Altium Library (see README).\n",
+                + [("  Try: Get from SnapEDA (direct), From Ultra Librarian, EasyEDA by LCSC #, "
+                    "or the Celestial Altium Library (see README).\n",
                     "")])
             self.status_var.set(f"No exact CSE model for {mpn}.")
             return
@@ -789,14 +876,138 @@ class App:
                      task, done)
 
     def _cse_update_login_label(self, verified: bool = False, rejected: bool = False) -> None:
-        email, password = self._cse_login
+        """Which logins are saved - site names only, never the email."""
+        names = []
         if rejected:
-            text = "CSE: login rejected"
-        elif email and password:
-            text = f"CSE: {email}" + (" (signed in)" if verified else "")
-        else:
-            text = "CSE: not signed in"
-        self.cse_login_var.set(text)
+            names.append("CSE (rejected)")
+        elif all(self._cse_login):
+            names.append("CSE")
+        if all(self._snap_login):
+            names.append("SnapEDA")
+        if all(self._ul_login):
+            names.append("Ultra Librarian")
+        self.cse_login_var.set(("Logins: " + ", ".join(names)) if names else
+                               "No logins saved (Settings)")
+
+    def _copy(self, text: str, secret: bool = False) -> None:
+        """Put text on the clipboard; a password is removed again after 30 s."""
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        if secret:
+            def clear():
+                try:
+                    if self.root.clipboard_get() == text:
+                        self.root.clipboard_clear()
+                        self.root.clipboard_append("")
+                except tk.TclError:
+                    pass
+            self.root.after(CLIPBOARD_CLEAR_MS, clear)
+
+    def _ul_copy_buttons(self) -> None:
+        """'Copy email' / 'Copy password' buttons inside Messages (Ultra Librarian sign-in)."""
+        email, pw = self._ul_login
+        if not (email and pw):
+            return
+        row = ttk.Frame(self.info, style="Card.TFrame")
+        ttk.Button(row, text="Copy email", command=lambda: (
+            self._copy(email), self.status_var.set("Email copied."))).pack(side="left")
+        ttk.Button(row, text="Copy password", command=lambda: (
+            self._copy(pw, secret=True),
+            self.status_var.set("Password copied - it is removed from the clipboard in 30 s."))
+                   ).pack(side="left", padx=4)
+        self.info.configure(state="normal")
+        self.info.insert("end", "  Sign-in on Ultra Librarian: ")
+        self.info.window_create("end", window=row)
+        self.info.insert("end", "\n")
+        self.info.configure(state="disabled")
+
+    def _ul_dialog(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Ultra Librarian")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, wraplength=560, justify="left", text=(
+            "Ultra Librarian asks for an \"I'm not a robot\" check before every download, so "
+            "you sign in and download in your browser and the app imports the file. Save your "
+            "login here to copy it into Ultra Librarian's sign-in page with one click. The app "
+            "never sends it anywhere. With 'Remember login' it is stored encrypted for your "
+            "Windows account (DPAPI); otherwise it is kept only until the app closes.")).grid(
+            row=0, column=0, columnspan=2, sticky="w")
+        email, pw = self._ul_login
+        filled = not (email or pw) and all(self._snap_login)
+        if filled:                       # usually the same account as SnapEDA
+            email, pw = self._snap_login
+        email_var, pw_var = tk.StringVar(value=email), tk.StringVar(value=pw)
+        remember = tk.BooleanVar(value=bool(self.creds.get(UL_EMAIL)) or not self._ul_login[0])
+        ttk.Label(frm, text="Email:").grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Entry(frm, textvariable=email_var, width=40).grid(row=1, column=1, sticky="w",
+                                                              pady=(10, 0))
+        ttk.Label(frm, text="Password:").grid(row=2, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=pw_var, width=40, show="*").grid(row=2, column=1, sticky="w")
+        ttk.Checkbutton(frm, variable=remember, text="Remember login (encrypted, restored when "
+                        "the app starts)").grid(row=3, column=1, sticky="w")
+        status = tk.StringVar(value="Filled in from your SnapEDA login - click Save to keep it."
+                              if filled else ("Saved" if all(self._ul_login) else "Not saved"))
+        ttk.Label(frm, textvariable=status, style="Muted.TLabel", wraplength=420).grid(
+            row=4, column=1, sticky="w")
+
+        def save():
+            e, p = email_var.get().strip(), pw_var.get()
+            if not (e and p):
+                status.set("Enter email and password.")
+                return
+            self._ul_login = (e, p)
+            try:
+                self.creds.set(UL_EMAIL, e if remember.get() else "")
+                self.creds.set(UL_PASSWORD, p if remember.get() else "", strip=False)
+            except Exception as ex:
+                log.exception("Saving Ultra Librarian login failed")
+                messagebox.showerror("Error", f"Could not save the login: {ex}", parent=dlg)
+                return
+            self._cse_update_login_label()
+            status.set("Saved" + (" (remembered)" if remember.get() else " (this session only)"))
+
+        def use_snap():
+            if not all(self._snap_login):
+                status.set("No SnapEDA login saved (Settings > SnapEDA).")
+                return
+            email_var.set(self._snap_login[0])
+            pw_var.set(self._snap_login[1])
+            status.set("Filled in from your SnapEDA login - click Save to keep it.")
+
+        def log_out():
+            self._ul_login = ("", "")
+            self.creds.set(UL_EMAIL, "")
+            self.creds.set(UL_PASSWORD, "")
+            email_var.set("")
+            pw_var.set("")
+            self._cse_update_login_label()
+            status.set("Logged out - the saved login was deleted.")
+
+        def open_sign_in():
+            if email_var.get().strip():
+                self._copy(email_var.get().strip())
+                status.set("Sign-in page opened; your email is on the clipboard.")
+            webbrowser.open(UL_LOGIN_URL)
+
+        lb = ttk.Frame(frm)
+        lb.grid(row=5, column=1, sticky="w", pady=(6, 2))
+        ttk.Button(lb, text="Save", style="Accent.TButton", command=save).pack(side="left")
+        ttk.Button(lb, text="Use my SnapEDA login", command=use_snap).pack(side="left", padx=4)
+        ttk.Button(lb, text="Log out", command=log_out).pack(side="left")
+        cb = ttk.Frame(frm)
+        cb.grid(row=6, column=1, sticky="w", pady=2)
+        ttk.Button(cb, text="Open sign-in page", command=open_sign_in).pack(side="left")
+        ttk.Button(cb, text="Copy email", command=lambda: (
+            self._copy(email_var.get().strip()), status.set("Email copied."))).pack(
+            side="left", padx=4)
+        ttk.Button(cb, text="Copy password", command=lambda: (
+            self._copy(pw_var.get(), secret=True),
+            status.set("Password copied - removed from the clipboard in 30 s."))).pack(side="left")
+        ttk.Button(frm, text="Close", command=dlg.destroy).grid(row=7, column=1, sticky="e",
+                                                               pady=(8, 0))
 
     def _cse_dialog(self) -> None:
         dlg = tk.Toplevel(self.root)
@@ -821,7 +1032,7 @@ class App:
         ttk.Entry(frm, textvariable=pw_var, width=40, show="*").grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(frm, variable=remember, text="Remember login (encrypted, restored when "
                         "the app starts)").grid(row=3, column=1, sticky="w")
-        status = tk.StringVar(value=self.cse_login_var.get())
+        status = tk.StringVar(value="Signed in" if all(self._cse_login) else "Not signed in")
         ttk.Label(frm, textvariable=status, foreground="#555").grid(row=4, column=1, sticky="w")
 
         def store(email, pw):
@@ -946,7 +1157,7 @@ class App:
             self._set_info(
                 [(f"SnapEDA has no exact {mpn} with a symbol and footprint.\n", "warn")]
                 + ([("  Similar, NOT the same part: " + ", ".join(near) + "\n", "")] if near else [])
-                + [("  Try: Get from CSE (direct), From Mouser (ECAD model), or EasyEDA by LCSC #.\n",
+                + [("  Try: Get from CSE (direct), From Ultra Librarian, or EasyEDA by LCSC #.\n",
                     "")])
             self.status_var.set(f"No exact SnapEDA model for {mpn}.")
             return
@@ -1036,6 +1247,7 @@ class App:
                 return
             store(user, pw)
             self._snap = client
+            self._cse_update_login_label()
             self._snap_save_session()
             status.set(f"Signed in as {user}" + (" (remembered)" if remember.get() else
                                                  " (this session only)"))
@@ -1046,6 +1258,7 @@ class App:
             self.creds.set(SNAP_PASSWORD, "")
             self.creds.set(SNAP_SESSION, "")
             pw_var.set("")
+            self._cse_update_login_label()
             status.set("Logged out - the saved login was deleted.")
 
         lb = ttk.Frame(frm)
@@ -1055,42 +1268,6 @@ class App:
         ttk.Button(lb, text="Open snapeda.com",
                    command=lambda: webbrowser.open(SNAPEDA_HOME)).pack(side="left", padx=4)
         ttk.Button(frm, text="Close", command=dlg.destroy).grid(row=6, column=1, sticky="e")
-
-    # ================= SamacSys Library Loader library =================
-    def _from_samacsys(self) -> None:
-        sch, pcb = self.settings.get("samacsys_schlib", ""), self.settings.get("samacsys_pcblib", "")
-        if not (sch and os.path.isfile(sch) and pcb and os.path.isfile(pcb)):
-            messagebox.showinfo(
-                "SamacSys library", "Select the SchLib and PcbLib that the official SamacSys "
-                "Library Loader adds parts to (see Library Loader settings). This is asked once.",
-                parent=self.root)
-            sch = filedialog.askopenfilename(parent=self.root, title="SamacSys symbol library",
-                                             filetypes=[("Altium SchLib", "*.SchLib")])
-            if not sch:
-                return
-            guess = os.path.splitext(sch)[0] + ".PcbLib"
-            pcb = guess if os.path.isfile(guess) else filedialog.askopenfilename(
-                parent=self.root, title="SamacSys footprint library",
-                filetypes=[("Altium PcbLib", "*.PcbLib")])
-            if not pcb:
-                return
-            sch, pcb = os.path.normpath(sch), os.path.normpath(pcb)
-            for p, ext in ((sch, ".SchLib"), (pcb, ".PcbLib")):
-                err = check_library(p, ext)
-                if err:
-                    messagebox.showerror("Invalid library", err, parent=self.root)
-                    return
-            self.settings.set("samacsys_schlib", sch)
-            self.settings.set("samacsys_pcblib", pcb)
-        self._step_file = ""
-        self.src_pcb.set(pcb)
-        self.src_sch.set(sch)          # triggers the component list (picks the MPN if present)
-        found = self.comp_var.get()
-        self._set_info([("Source: SamacSys library\n", "bold"), (f"  {sch}\n  {pcb}\n", ""),
-                        (f"  Component: {found}\n" if found else
-                         "  The MPN was not found in this library - download it on Component "
-                         "Search Engine with the Library Loader running, then click the button "
-                         "again, or choose a component.\n", "" if found else "warn")])
 
     # ================= EasyEDA (LCSC number) =================
     def _fetch_lcsc(self) -> None:
@@ -1228,6 +1405,11 @@ class App:
     def _set_info(self, parts: list[tuple[str, str]]) -> None:
         self.info.configure(state="normal")
         self.info.delete("1.0", "end")
+        self.info.configure(state="disabled")
+        self._append_info(parts)
+
+    def _append_info(self, parts: list[tuple[str, str]]) -> None:
+        self.info.configure(state="normal")
         for text, tag in parts:
             self.info.insert("end", text, tag)
         self.info.configure(state="disabled")
@@ -1265,11 +1447,7 @@ class App:
 
 def run_gui(settings: Settings, creds: CredentialStore, db: Database, providers: list) -> None:
     root = tk.Tk()
-    try:
-        ttk.Style(root).theme_use("vista")
-    except tk.TclError:
-        pass
-    icon = Path(__file__).with_name("app.ico")      # also bundled inside the .exe
+    icon =Path(__file__).with_name("app.ico")      # also bundled inside the .exe
     if icon.exists():
         try:
             root.iconbitmap(default=str(icon))
