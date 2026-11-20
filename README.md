@@ -102,6 +102,7 @@ Everything is reported in **Messages**: green is OK, orange is a warning, red is
 | "Component Search Engine rejected the email/password" | Re-enter them under **Settings → Component Search Engine… → Sign in & test**. |
 | Mouser search says "Not configured" | Add your own Mouser API key in **Settings → API keys…**. The import works without a key. |
 | The 3D model sits in the wrong place | Open the footprint in Altium, press **3**, and move or rotate the 3D body. Downloaded models are placed at the footprint origin. |
+| A footprint looks **empty** (it has pads in the list, but you see nothing) | This was caused by version 1.1.0 or earlier: the 3D model was placed far away. In the PCB Library panel, delete that footprint and its symbol, then import the part again with 1.1.1 or newer. |
 
 Your data lives in `%APPDATA%\AltiumLibraryManager\` (settings, encrypted logins, backups, log file `alm.log`). Open it with **Settings → Open data folder**. To uninstall, delete the `.exe` and that folder.
 

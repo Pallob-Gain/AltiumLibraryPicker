@@ -151,12 +151,16 @@ end;
 
 { Attach a STEP file as 3D body to a footprint that has none (SamacSys ships the STEP separately).
   Body creation follows EasyEDA-Importer's verified BuildFootprint code. Placed at the footprint
-  origin, unrotated - the user must check the 3D view. }
-procedure AttachStep(DestLib : IPCB_Library; Fp : IPCB_LibComponent; StepFile : String);
+  origin, unrotated - the user must check the 3D view.
+  Called on the SOURCE footprint (a temporary extracted copy, never saved): a body created by
+  script directly in an existing destination library reloads 50000 mil away at absolute (0,0)
+  (verified AD26), while bodies brought over by the normal copy (Replicate) reload correctly. }
+function AttachStep(Lib : IPCB_Library; Fp : IPCB_LibComponent; StepFile : String) : Boolean;
 var
   Body : IPCB_ComponentBody;
   Model : IPCB_Model;
 begin
+  Result := False;
   if (StepFile = '') or (not FileExists(StepFile)) then Exit;
   if CountBodies(Fp) > 0 then Exit;
   PCBServer.PreProcess;
@@ -183,11 +187,10 @@ begin
       Body.SetState_FromModel;
     except
     end;
-    Body.MoveByXY(DestLib.Board.XOrigin, DestLib.Board.YOrigin);
-    DestLib.Board.AddPCBObject(Body);
-    Fp.AddPCBObject(Body);
+    Body.MoveByXY(Lib.Board.XOrigin, Lib.Board.YOrigin);   { model arrives at absolute (0,0) }
+    Fp.AddPCBObject(Body);       { footprint only: also adding to Lib.Board duplicated it }
     PCBServer.SendMessageToRobots(Fp.I_ObjectAddress, c_Broadcast, PCBM_BoardRegisteration, Body.I_ObjectAddress);
-    Res.Add('ADDED_3D=' + Fp.Name + '|' + ExtractFileName(StepFile));
+    Result := True;
   finally
     PCBServer.PostProcess;
   end;
@@ -199,6 +202,7 @@ var
   SrcFp, NewFp : IPCB_LibComponent;
   NewName : String;
   idx, nNew, nSrc : Integer;
+  Added3D : Boolean;
 begin
   Result := '';
   idx := FpOld.IndexOf(UpperCase(Name));
@@ -231,6 +235,7 @@ begin
       Exit;
     end;
   end;
+  Added3D := AttachStep(SrcLib, SrcFp, JobVal('StepFile'));     { into the temp source copy }
   CopyFootprint(SrcLib, DestLib, SrcFp, NewName);
   NewFp := FindFp(DestLib, NewName);
   if NewFp = nil then
@@ -245,7 +250,7 @@ begin
          ' primitives. Library NOT saved.');
   Res.Add('VERIFY_FOOTPRINT=' + NewName + '|primitives ' + IntToStr(nNew) + '/' + IntToStr(nSrc));
   Res.Add('ADDED_FOOTPRINT=' + NewName);
-  if not Failed then AttachStep(DestLib, NewFp, JobVal('StepFile'));
+  if Added3D then Res.Add('ADDED_3D=' + NewName + '|' + ExtractFileName(JobVal('StepFile')));
   FpOld.Add(UpperCase(Name));
   FpNew.Add(NewName);
   Result := NewName;

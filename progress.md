@@ -10,6 +10,21 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-20 — v1.1.1: fix "empty footprint" after a 3D model was attached ✅
+
+- **Symptom** (RA1005F822CS, CRCW08051R00FNEB): the footprint showed nothing in the PCB library editor.
+- **Cause:** the pads and outline were copied correctly. The 3D body attached by the app reloaded at the library's absolute (0,0), 50,000 mil from the footprint origin, so Altium zoomed out until the footprint was invisible.
+  - Verified in AD26: a body created by script directly in an existing library is placed correctly in memory, and the saved record looks identical to a good one, but after reopening it sits at absolute (0,0).
+  - Moving it after adding, begin/end-modify notifications, save kind, and footprint refresh do not change that.
+  - Bodies brought over by the normal copy (Replicate) reload correctly.
+- **Fix:** the STEP is now attached to the footprint in the temporary extracted source library, which is never saved, and the normal copy carries it into the destination. The body is added to the footprint only; also adding it to the library board duplicated it.
+- **Verified after reopening from disk:**
+  - RESC1005X40N has exactly 1 body at −20…+20 mil, over the pads;
+  - primitives 11/11, and Altium's library search finds the footprint.
+- **The user's library** had 3 footprints imported with the bug: RESC1005X40N, RESC1005X40N_1 and CAPPRD200W50D525H1250_1. They were found with a read-only scan and need to be deleted and re-imported (see the chat or README).
+
+---
+
 ## 2026-11-20 — v1.1.0: "Get from CSE (direct)" ✅ verified live
 
 - **Get from CSE (direct)** (step 3, first button): MPN → CSE search (`ad.componentsearchengine.com/ga/search.php?kws=<MPN>&v=1`, Basic auth, the method from the user's own `downloader.py`) → **exact** MPN matches that have a model → download (`model.php`) with progress → automatic import with backup, duplicate handling, verification and 3D attach.
