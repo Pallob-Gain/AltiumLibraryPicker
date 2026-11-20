@@ -28,6 +28,10 @@ from ..search import SearchOutcome, run_search
 from ..cse import CSE_HOME, DownloadWatcher, claim, default_downloads_dir, human_size
 from ..cse_client import (CRED_EMAIL, CRED_PASSWORD, CseAuthError, CseClient, CseError,
                           exact_matches, parse_epw, read_epw)
+from ..snapeda_client import (CRED_PASSWORD as SNAP_PASSWORD, CRED_SESSION as SNAP_SESSION,
+                              CRED_USER as SNAP_USER,
+                              SNAPEDA_HOME, SnapAuthError, SnapClient, SnapError)
+from ..snapeda_client import exact_matches as snap_exact_matches
 from ..easyeda.fetch import UNOFFICIAL_NOTE, clean_lcsc, fetch_and_build
 from ..schlib_reader import best_match, list_symbols
 from ..sources import resolve_source
@@ -72,6 +76,8 @@ class App:
         self._step_place = None        # StepPlacement for _step_file (from CSE), None = unknown
         # CSE login: restored from the encrypted store ("Remember login"), or session-only
         self._cse_login = (creds.get(CRED_EMAIL), creds.get(CRED_PASSWORD))
+        self._snap_login = (creds.get(SNAP_USER), creds.get(SNAP_PASSWORD))
+        self._snap: SnapClient | None = None     # signed-in SnapEDA session (memory only)
         self._queue: queue.Queue = queue.Queue()
         self._busy = False
         self._build()
@@ -90,6 +96,7 @@ class App:
         m = tk.Menu(menubar, tearoff=False)
         m.add_command(label="API keys...", command=self._api_keys_dialog)
         m.add_command(label="Component Search Engine...", command=self._cse_dialog)
+        m.add_command(label="SnapEDA...", command=self._snap_dialog)
         m.add_command(label="Open data folder (backups, logs)",
                       command=lambda: os.startfile(self.work_dir))
         menubar.add_cascade(label="Settings", menu=m)
@@ -164,6 +171,8 @@ class App:
         self.cse_direct_btn = ttk.Button(af, text="Get from CSE (direct)",
                                          command=self._cse_direct)
         self.cse_direct_btn.pack(side="left", padx=(0, 4))
+        ttk.Button(af, text="Get from SnapEDA (direct)", command=self._snap_direct).pack(
+            side="left", padx=(0, 4))
         self.mouser_btn = ttk.Button(af, text=WATCH_SITES["mouser_web"][0],
                                      command=lambda: self._cse_toggle("mouser_web"))
         self.mouser_btn.pack(side="left")
@@ -693,13 +702,14 @@ class App:
         else:
             self._cse_choose(exact)
 
-    def _cse_choose(self, parts) -> None:
+    def _cse_choose(self, parts, pick=None, site: str = "Component Search Engine") -> None:
+        pick = pick or self._cse_direct_download
         dlg = tk.Toplevel(self.root)
-        dlg.title("Choose the part - Component Search Engine")
+        dlg.title(f"Choose the part - {site}")
         dlg.transient(self.root)
         dlg.grab_set()
         ttk.Label(dlg, padding=8, text=f"{parts[0].mpn} exists under several manufacturers on "
-                  "Component Search Engine. Choose the right one:").pack(anchor="w")
+                  f"{site}. Choose the right one:").pack(anchor="w")
         cols = (("mfr", "Manufacturer", 160), ("desc", "Description", 330), ("pkg", "Package", 150),
                 ("3d", "3D", 40), ("conf", "Checked", 150))
         tree = ttk.Treeview(dlg, columns=[c[0] for c in cols], show="headings", height=6,
@@ -709,7 +719,8 @@ class App:
             tree.column(cid, width=w, stretch=cid == "desc")
         for i, p in enumerate(parts):
             tree.insert("", "end", iid=str(i), values=(p.manufacturer, p.description, p.package,
-                                                       "Yes" if p.has_3d else "-", p.confidence))
+                                                       "Yes" if p.has_3d else "-",
+                                                       getattr(p, "confidence", "")))
         tree.pack(fill="both", expand=True, padx=8)
         tree.selection_set("0")
 
@@ -717,7 +728,7 @@ class App:
             sel = tree.selection()
             if sel:
                 dlg.destroy()
-                self._cse_direct_download(parts[int(sel[0])])
+                pick(parts[int(sel[0])])
         tree.bind("<Double-1>", lambda e: ok())
         bb = ttk.Frame(dlg, padding=8)
         bb.pack(fill="x")
@@ -891,6 +902,159 @@ class App:
             self.status_var.set("Component Search Engine settings saved.")
             dlg.destroy()
         ttk.Button(frm, text="Save && close", command=save).grid(row=9, column=2, sticky="e")
+
+    # ================= SnapEDA direct: search -> sign in -> download -> import =================
+    def _snap_client(self) -> SnapClient:
+        """The session's SnapEDA client (created on the worker thread, reused afterwards)."""
+        user, pw = self._snap_login
+        if self._snap is None or (self._snap._user, self._snap._pw) != (user, pw):
+            # a remembered login also keeps the signed-in session (SnapEDA limits sign-ins)
+            saved = self.creds.get(SNAP_SESSION) if self.creds.get(SNAP_USER) == user else ""
+            self._snap = SnapClient(user, pw, session=saved)
+        return self._snap
+
+    def _snap_save_session(self) -> None:
+        """Keep the signed-in SnapEDA session (encrypted) when the login is remembered."""
+        try:
+            if self._snap is not None and self.creds.get(SNAP_USER) and                     self._snap.session != self.creds.get(SNAP_SESSION):
+                self.creds.set(SNAP_SESSION, self._snap.session, strip=False)
+        except Exception:
+            log.exception("Saving the SnapEDA session failed")
+
+    def _snap_direct(self) -> None:
+        mpn = self._current_mpn()
+        if not mpn:
+            return
+        if check_library(self.dst_sch.get(), ".SchLib") or \
+                check_library(self.dst_pcb.get(), ".PcbLib"):
+            messagebox.showerror("SnapEDA", "Select the destination SchLib and PcbLib first - the "
+                                 "part is imported into them.", parent=self.root)
+            return
+        if not all(self._snap_login):
+            messagebox.showinfo("SnapEDA", "Sign in with your SnapEDA account first "
+                                "(Settings > SnapEDA).", parent=self.root)
+            self._snap_dialog()
+            return
+        self._run_bg(f"Searching SnapEDA for {mpn}...",
+                     lambda: (mpn, self._snap_client().search(mpn)), self._snap_found)
+
+    def _snap_found(self, result) -> None:
+        mpn, parts = result
+        exact = snap_exact_matches(parts, mpn)
+        if not exact:
+            near = [f"{p.mpn} ({p.manufacturer})" for p in parts[:8]]
+            self._set_info(
+                [(f"SnapEDA has no exact {mpn} with a symbol and footprint.\n", "warn")]
+                + ([("  Similar, NOT the same part: " + ", ".join(near) + "\n", "")] if near else [])
+                + [("  Try: Get from CSE (direct), From Mouser (ECAD model), or EasyEDA by LCSC #.\n",
+                    "")])
+            self.status_var.set(f"No exact SnapEDA model for {mpn}.")
+            return
+        want_mfr = self.param_vars["Manufacturer"].get().strip().lower()
+        same_mfr = [p for p in exact if want_mfr and (p.manufacturer.lower() == want_mfr or
+                                                       p.manufacturer.lower().startswith(want_mfr + " "))]
+        if len(exact) == 1:
+            self._snap_download(exact[0])
+        elif len(same_mfr) == 1:
+            self._snap_download(same_mfr[0])
+        else:
+            self._cse_choose(exact, pick=self._snap_download, site="SnapEDA")
+
+    def _snap_download(self, part) -> None:
+        for key, val in (("Manufacturer", part.manufacturer), ("Manufacturer Part Number", part.mpn),
+                         ("Description", part.description)):
+            if val and not self.param_vars[key].get().strip():
+                self.param_vars[key].set(val)
+        out = self.work_dir / "downloads" / f"snapeda-{part.unipart_id}-{os.getpid()}-{id(part)}"
+        label = f"{part.mpn} ({part.manufacturer})"
+
+        def progress(done, total):
+            self._progress_text = (f"Downloading {label} from SnapEDA: {human_size(done)}"
+                                   + (f" of {human_size(total)}" if total else ""))
+
+        def done(path):
+            self._snap_save_session()
+            self._auto_import_next = True        # the user asked for this part: import it
+            self._load_download(path)
+
+        self._run_bg(f"Signing in to SnapEDA and downloading {label}...",
+                     lambda: self._snap_client().download(part, out, progress), done)
+
+    def _snap_dialog(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("SnapEDA")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        frm = ttk.Frame(dlg, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, wraplength=560, justify="left", text=(
+            "Your snapeda.com login is used only to download the Altium models of parts you ask "
+            "for with 'Get from SnapEDA (direct)'. It is sent only to www.snapeda.com over HTTPS. "
+            "With 'Remember login' it is stored encrypted for your Windows account (DPAPI); "
+            "otherwise it is kept only until the app closes.")).grid(row=0, column=0, columnspan=2,
+                                                                       sticky="w")
+        user_var = tk.StringVar(value=self._snap_login[0])
+        pw_var = tk.StringVar(value=self._snap_login[1])
+        remember = tk.BooleanVar(value=bool(self.creds.get(SNAP_USER)) or not self._snap_login[0])
+        ttk.Label(frm, text="Username or email:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(frm, textvariable=user_var, width=40).grid(row=1, column=1, sticky="w",
+                                                             pady=(8, 0))
+        ttk.Label(frm, text="Password:").grid(row=2, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=pw_var, width=40, show="*").grid(row=2, column=1, sticky="w")
+        ttk.Checkbutton(frm, variable=remember, text="Remember login (encrypted, restored when "
+                        "the app starts)").grid(row=3, column=1, sticky="w")
+        status = tk.StringVar(value="Signed in" if all(self._snap_login) else "Not signed in")
+        ttk.Label(frm, textvariable=status, foreground="#555", wraplength=420).grid(
+            row=4, column=1, sticky="w")
+
+        def store(user, pw):
+            self._snap_login = (user, pw)
+            try:
+                self.creds.set(SNAP_USER, user if remember.get() else "")
+                self.creds.set(SNAP_PASSWORD, pw if remember.get() else "", strip=False)
+                if not remember.get():
+                    self.creds.set(SNAP_SESSION, "")
+            except Exception as e:
+                log.exception("Saving SnapEDA login failed")
+                messagebox.showerror("Error", f"Could not save the login: {e}", parent=dlg)
+
+        def sign_in():
+            user, pw = user_var.get().strip(), pw_var.get()
+            if not (user and pw):
+                status.set("Enter username and password.")
+                return
+            status.set("Checking with snapeda.com ...")
+            dlg.update_idletasks()
+            client = SnapClient(user, pw)
+            try:
+                client.login()
+            except SnapAuthError as e:
+                status.set(str(e))
+                return
+            except SnapError as e:
+                status.set(f"Could not check the login: {e}")
+                return
+            store(user, pw)
+            self._snap = client
+            self._snap_save_session()
+            status.set(f"Signed in as {user}" + (" (remembered)" if remember.get() else
+                                                 " (this session only)"))
+
+        def log_out():
+            self._snap_login, self._snap = ("", ""), None
+            self.creds.set(SNAP_USER, "")
+            self.creds.set(SNAP_PASSWORD, "")
+            self.creds.set(SNAP_SESSION, "")
+            pw_var.set("")
+            status.set("Logged out - the saved login was deleted.")
+
+        lb = ttk.Frame(frm)
+        lb.grid(row=5, column=1, sticky="w", pady=4)
+        ttk.Button(lb, text="Sign in & test", command=sign_in).pack(side="left")
+        ttk.Button(lb, text="Log out", command=log_out).pack(side="left", padx=4)
+        ttk.Button(lb, text="Open snapeda.com",
+                   command=lambda: webbrowser.open(SNAPEDA_HOME)).pack(side="left", padx=4)
+        ttk.Button(frm, text="Close", command=dlg.destroy).grid(row=6, column=1, sticky="e")
 
     # ================= SamacSys Library Loader library =================
     def _from_samacsys(self) -> None:

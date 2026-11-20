@@ -10,6 +10,25 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-20 — v1.2.0: Get from SnapEDA (direct) ✅
+
+- **What:** a **Get from SnapEDA (direct)** button: exact-MPN search, sign-in, Altium download, import. Login under **Settings → SnapEDA…** (DPAPI-encrypted, like CSE). The user stated they have permission to download from SnapEDA this way.
+- **Protocol** (learned from akiselev/datasheet-cli, GPL-3.0; **no code copied**, `alm/snapeda_client.py` is original, the project stays MIT):
+  - The login page gives the csrftoken cookie and form token.
+  - Search: `POST /api/v1/search_local_internal`. Part details: `GET /api/get_part_for_unipart/<id>`, which gives `download_url`.
+  - Login: Django form POST.
+  - Download: `GET /parts/snapapi/download-component/<part>/<unipart>/altium_native`, which returns JSON `{"url"}`. The file is fetched without SnapEDA cookies.
+- **Verified live:**
+  - Python's standard library with a normal browser User-Agent gets through SnapEDA's Cloudflare.
+  - Search and part details work without a login. Download without a login redirects to the login page.
+  - With the user's login, CRCW08051R00FNEB arrives as a single **`.IntLib`** (21 KB), not a zip.
+- **End to end through the app (AD26, temporary libraries):** CRCW08051R00FNEB was searched, downloaded, its IntLib extracted in Altium and imported. Pins 2/2, primitives 12/12, the pin check passed, linked, and Altium's library search finds it.
+- **No 3D model:** SnapEDA's Altium download has no 3D body, and its STEP is a separate download whose format name is unknown. Part pages return 403 (Cloudflare) to scripts. For 3D, use Get from CSE (direct).
+- **SnapEDA rate-limits sign-ins (HTTP 429).** The client loads the login page once per sign-in. With "Remember login" the signed-in session is kept (DPAPI) and reused, and the app signs in again only when SnapEDA expires it. A 429 gives a clear "wait a few minutes" message.
+- **Tests:** 13 SnapEDA unit tests (parsing, exact match, download-path validation, form token, sign-in fields, rejected login without the password in the message, session reuse, re-sign-in on expiry, zip and IntLib downloads, no cookies sent to the file host).
+
+---
+
 ## 2026-11-20 — v1.1.3: "Footprint not found" on a placed part until Altium restart ✅
 
 - **Symptom (user):** after an import, a placed symbol said "footprint not found" until Altium was restarted. `alm.log` showed that **every** import on the user's PC reported "library search does not find footprint", from every source, while temporary test projects passed.

@@ -31,11 +31,12 @@ Free and open source (MIT). No Python or other software to install. It works wit
 |---|---|---|
 | Your **destination libraries** (where parts go) | Step 3 → **Destination SchLib / Destination PcbLib → Select…** | **Yes**, once. The app remembers them. |
 | A **Component Search Engine** account (free) | Create one at [componentsearchengine.com](https://componentsearchengine.com/), then in the app: **Settings → Component Search Engine…** → enter email + password → tick **Remember login** → **Sign in & test**. | **Recommended**: needed for **Get from CSE (direct)**. Mouser also asks for this account. |
+| A **SnapEDA** account (free) | Create one at [snapeda.com](https://www.snapeda.com/), then in the app: **Settings → SnapEDA…** → enter username/email + password → tick **Remember login** → **Sign in & test**. | Optional: needed for **Get from SnapEDA (direct)**. |
 | Your own **Mouser API key** (free) | [Get a key](https://www.mouser.com/api-search/), then in the app: **Settings → API keys…** | Optional: only for the search table in steps 1 and 2 |
 
 Keys and logins are stored **encrypted for your Windows account** (Windows DPAPI). They are never stored in the app file or uploaded anywhere except to the service they belong to. Every user enters **their own** Mouser key; none is built in.
 
-## 3. Get a part: five ways
+## 3. Get a part: six ways
 
 Enter the MPN in **1. Part number** first. Most buttons use it.
 
@@ -45,6 +46,15 @@ Enter the MPN in **1. Part number** first. Most buttons use it.
 3. If the same MPN exists under several manufacturers, the app takes the one in the **Manufacturer** field. Otherwise it asks you to choose.
 
    Only **exact** MPN matches are used; `MCP23017-E/ML` and `MCP23017T-E/ML` are different parts. If CSE has no model, Messages lists the similar parts it found and suggests the other ways below.
+
+### A2. SnapEDA, direct (fully automatic)
+1. Sign in once under **Settings → SnapEDA…**.
+2. Click **Get from SnapEDA (direct)**. The app searches SnapEDA for the exact MPN, signs in, downloads the Altium library, and imports it, just like the CSE button.
+3. If the same MPN exists under several manufacturers, the app takes the one in the **Manufacturer** field, or asks you to choose.
+
+   SnapEDA's Altium download has **no 3D model**. If you need 3D, use **Get from CSE (direct)** for the part.
+
+   SnapEDA limits how often you can sign in and download. If it says "too many requests", wait a few minutes.
 
 ### B. Mouser
 1. In **3. Import into Altium**, click **From Mouser (ECAD model)…**. Mouser opens in your browser with the part.
@@ -119,5 +129,6 @@ Contributions are welcome: fork, change, run the tests, and open a pull request.
 ## Credits and licence
 
 - The EasyEDA converter (`alm/easyeda/convert.py`) and part builder (`alm/altium/ee_build.pas`) come from [EasyEDA-Importer](https://github.com/hiteshwar/EasyEDA-Importer), by the same author.
+- The SnapEDA download method was learned from [datasheet-cli](https://github.com/akiselev/datasheet-cli) (GPL-3.0). No code was copied; `alm/snapeda_client.py` is an original implementation.
 - Licensed under [MIT](LICENSE): free to use, copy, modify and share, including commercially; keep the licence notice. **No warranty.** Always check footprints and pinouts against the datasheet before ordering PCBs.
-- Not affiliated with Altium, Mouser, SamacSys/Supplyframe (Component Search Engine), EasyEDA, LCSC or JLCPCB. Library data from those sites is subject to their own terms.
+- Not affiliated with Altium, Mouser, SamacSys/Supplyframe (Component Search Engine), SnapEDA/SnapMagic, EasyEDA, LCSC or JLCPCB. Library data from those sites is subject to their own terms.
