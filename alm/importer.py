@@ -138,7 +138,7 @@ def finish_values(req: ImportRequest, prep: bridge.ImportReport,
                   report: bridge.ImportReport) -> dict[str, str]:
     footprints = sorted({f for _, f, _ in report.links if f}) if report.ok else []
     values = {"Action": "finish", "DestSchLib": req.dest_schlib, "DestPcbLib": req.dest_pcblib,
-              "FootprintCount": str(len(footprints)), "CloseDocs": "1",
+              "FootprintCount": str(len(footprints)), "CloseDocs": "1", "Refresh": "1",
               "ReopenSch": "1" if prep.flags.get("SCH_WAS_OPEN") == "1" else "0",
               "ReopenPcb": "1" if prep.flags.get("PCB_WAS_OPEN") == "1" else "0"}
     for i, fp in enumerate(footprints, 1):
@@ -148,10 +148,16 @@ def finish_values(req: ImportRequest, prep: bridge.ImportReport,
 
 def _finish(req, prep, report, x2, work_dir, timeout) -> None:
     try:
-        fin = bridge.run_job(x2, work_dir, finish_values(req, prep, report), timeout)
+        values = finish_values(req, prep, report)
+        fin = bridge.run_job(x2, work_dir, values, timeout)
+        if fin.flags.get("REFRESHED") == "1":
+            # a footprint was not found: Altium's library refresh ran (applied once that run
+            # ended, verified AD26); check again - this run also closes the libraries
+            report.warnings += fin.errors + fin.warnings
+            time.sleep(1.5)
+            fin = bridge.run_job(x2, work_dir, {**values, "Refresh": "0"}, timeout)
         report.cache = fin.cache
         report.warnings += fin.errors + fin.warnings
-        values = finish_values(req, prep, report)
         if "1" in (values["ReopenSch"], values["ReopenPcb"]):
             # reopen FROM DISK in a new run, once Altium has finished closing (see DoFinish)
             time.sleep(1.5)

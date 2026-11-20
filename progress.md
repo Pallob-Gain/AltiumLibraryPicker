@@ -10,6 +10,21 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-20 — v1.1.3: "Footprint not found" on a placed part until Altium restart ✅
+
+- **Symptom (user):** after an import, a placed symbol said "footprint not found" until Altium was restarted. `alm.log` showed that **every** import on the user's PC reported "library search does not find footprint", from every source, while temporary test projects passed.
+- **Cause (reproduced on AD26):** once Altium's cached copy of a library goes *stale* in a session (for example after a save while the library was shown in an editor), later saves never refresh it, not even with the correct import sequence, until Altium restarts. The symbol list for the SchLib was stale as well. `UpdateCachedFileIfNecessary` does not help.
+- **Fix:** if the footprint check fails, `finish` runs `IntegratedLibrary:RefreshInstalledLibraries` (the library refresh; it reloads project libraries too). The refresh takes effect only **after** that script run ends, so the importer checks again in a new run, which then closes the libraries as before.
+- **Verified:**
+  - A stale library stayed "not found" for over 15 s.
+  - After the refresh run, the footprint was found and the SchLib's symbol list was current.
+  - The script's refresh branch was tested live, and a full import was tested.
+  - Tests ran on temporary projects in the user's running Altium (9 projects open) and on a copy of the user's libraries in a path with spaces.
+- **Tests:** 77 unit tests pass (new: refresh-then-recheck sequence).
+- **Note for development:** `WorkspaceManager:CloseObject` closes the **focused** project and ignores `FileName` (verified).
+
+---
+
 ## 2026-11-20 — v1.1.2: correct 3D placement + footprint visible without restart ✅
 
 ### 1. 3D model misaligned (rotated / shifted)

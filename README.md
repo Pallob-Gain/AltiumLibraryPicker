@@ -96,7 +96,7 @@ Everything is reported in **Messages**: green is OK, orange is a warning, red is
 | Antivirus warns about the .exe | One-file Python apps sometimes trigger false alarms. You can check the source code here, or [run from source](#run-from-source-for-developers) instead. |
 | "A destination library is open in Altium with unsaved changes" | Save or close that library in Altium, then import again. |
 | "No answer from Altium" | Make sure Altium is running and no dialog is waiting in Altium, then retry. |
-| Footprint "not found" when placing | The destination PcbLib must be in your open project or installed in Altium. Alternatively, choose **Footprint link: Full library path** before importing. |
+| Footprint "not found" when placing | The destination PcbLib must be in your open project or installed in Altium. Alternatively, choose **Footprint link: Full library path** before importing. Since 1.1.3 the app refreshes Altium's libraries itself when Altium has not noticed the new footprint, so no restart is needed. If Messages still says "library search does not find footprint", restart Altium once. |
 | Mouser/CSE download is not picked up | The app watches your normal Downloads folder. If your browser saves somewhere else, set that folder in **Settings → Component Search Engine…**. |
 | CSE keeps showing its login page | Use **Get from CSE (direct)**, which needs no browser, or the **Mouser** button, which gives the same files. |
 | "Component Search Engine rejected the email/password" | Re-enter them under **Settings → Component Search Engine… → Sign in & test**. |

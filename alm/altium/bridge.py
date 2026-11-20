@@ -224,7 +224,7 @@ def parse_result(text: str) -> ImportReport:
             r.warnings.append(val)
         elif key == "ERROR":
             r.errors.append(val)
-        elif key in ("SCH_WAS_OPEN", "PCB_WAS_OPEN"):
+        elif key in ("SCH_WAS_OPEN", "PCB_WAS_OPEN", "REFRESHED"):
             r.flags[key] = val
         elif key == "VERIFY_CACHE":
             fp, _, state = val.rpartition("|")

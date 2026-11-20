@@ -543,7 +543,8 @@ end;
   if the library was open in an editor while being saved. Otherwise the new footprint stays
   "not found" until Altium restarts. So an import is separate runs:
   Action=prepare (close destinations open in an editor), Action=import with KeepOpen=1 (save, leave
-  loaded), Action=finish (check the library search, close the libraries with CloseDocs=1),
+  loaded), Action=finish (check the library search; with Refresh=1 a footprint not found triggers
+  Altium's library refresh and the caller runs finish again; close the libraries with CloseDocs=1),
   Action=reopen (open what the user had open, fresh from disk). }
 procedure DoPrepare;
 var
@@ -575,15 +576,33 @@ var
   Fp, Found : String;
   Path : WideString;
   D : IServerDocument;
+  Missing : Boolean;
 begin
   Step := 'check library search';
+  Missing := False;
   for i := 1 to StrToInt(JobVal('FootprintCount')) do
   begin
     Fp := JobVal('Footprint' + IntToStr(i));
     Path := '';
     Found := IntegratedLibraryManager.FindDatafileInStandardLibs(Fp, 'PCBLIB', JobVal('DestPcbLib'), True, Path);
     if Found <> '' then Res.Add('VERIFY_CACHE=' + Fp + '|ok')
-    else Res.Add('VERIFY_CACHE=' + Fp + '|not found');
+    else
+    begin
+      Res.Add('VERIFY_CACHE=' + Fp + '|not found');
+      Missing := True;
+    end;
+  end;
+  { Once Altium's cached copy of a library has gone stale in a session (e.g. after a save while the
+    library was shown in an editor), later saves no longer refresh it, until a restart. The
+    Components panel's library refresh does reload it - effective after this run ends (verified
+    AD26 2026-11-20). Keep the libraries loaded; the caller checks again in a new run, which closes. }
+  if Missing and (JobVal('Refresh') = '1') then
+  begin
+    Step := 'refresh libraries';
+    ResetParameters;
+    RunProcess('IntegratedLibrary:RefreshInstalledLibraries');
+    Res.Add('REFRESHED=1');
+    Exit;
   end;
   { Always close the libraries the import left loaded - also those the user had open; Action=reopen
     loads those again FROM DISK in a later run. Showing the import's own in-memory copy instead

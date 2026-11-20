@@ -2,7 +2,9 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
+from alm import importer
 from alm.altium import bridge
 from alm.importer import (ImportRequest, finish_values, job_values, placement_values,
                           validate)
@@ -120,6 +122,26 @@ class JobTests(TmpCase):
         self.assertEqual((v["ReopenSch"], v["ReopenPcb"], v["CloseDocs"]), ("0", "1", "1"))
         failed = bridge.parse_result("STATUS=ERROR\nERROR=x\nEND=1")
         self.assertEqual(finish_values(req, prep, failed)["FootprintCount"], "0")
+
+    def test_finish_refreshes_and_checks_again_when_not_found(self):
+        req = ImportRequest("a", "b", "c.SchLib", "d.PcbLib")
+        prep = bridge.parse_result("STATUS=OK\nSCH_WAS_OPEN=1\nEND=1")
+        rep = bridge.parse_result(RESULT_OK)
+        answers = [bridge.parse_result("STATUS=OK\nVERIFY_CACHE=FP1|not found\nREFRESHED=1\nEND=1"),
+                   bridge.parse_result("STATUS=OK\nVERIFY_CACHE=FP1|ok\nEND=1"),
+                   bridge.parse_result("STATUS=OK\nEND=1")]
+        sent = []
+
+        def fake_run(x2, work, values, timeout):
+            sent.append(dict(values))
+            return answers[len(sent) - 1]
+        with mock.patch.object(importer.bridge, "run_job", side_effect=fake_run), \
+                mock.patch.object(importer.time, "sleep"):
+            importer._finish(req, prep, rep, Path("x2"), Path("w"), 10)
+        self.assertEqual([(v["Action"], v["Refresh"]) for v in sent],
+                         [("finish", "1"), ("finish", "0"), ("reopen", "1")])
+        self.assertTrue(rep.cache_ok)
+        self.assertIn("finds footprint FP1", rep.summary())
 
     def test_validate_rejects_same_file(self):
         sch = make_lib(self.dir / "a.SchLib")
