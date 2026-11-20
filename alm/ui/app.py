@@ -27,7 +27,7 @@ from ..providers.mouser import CRED_NAME as MOUSER_CRED
 from ..search import SearchOutcome, run_search
 from ..cse import CSE_HOME, DownloadWatcher, claim, default_downloads_dir, human_size
 from ..cse_client import (CRED_EMAIL, CRED_PASSWORD, CseAuthError, CseClient, CseError,
-                          exact_matches, read_epw)
+                          exact_matches, parse_epw, read_epw)
 from ..easyeda.fetch import UNOFFICIAL_NOTE, clean_lcsc, fetch_and_build
 from ..schlib_reader import best_match, list_symbols
 from ..sources import resolve_source
@@ -69,6 +69,7 @@ class App:
         self._auto_import_next = False
         self._progress_text = ""
         self._step_file = ""
+        self._step_place = None        # StepPlacement for _step_file (from CSE), None = unknown
         # CSE login: restored from the encrypted store ("Remember login"), or session-only
         self._cse_login = (creds.get(CRED_EMAIL), creds.get(CRED_PASSWORD))
         self._queue: queue.Queue = queue.Queue()
@@ -436,6 +437,7 @@ class App:
         # one STEP in the package (SamacSys/Mouser ship it separately): attached to imported
         # footprints that have no 3D body of their own
         self._step_file = str(pkg.step_files[0]) if len(pkg.step_files) == 1 else ""
+        self._step_place = None
         lines = [("Downloaded library loaded:\n", "bold"),
                  (f"  Symbol library:    {pkg.schlib or 'NOT FOUND'}\n", "" if pkg.schlib else "err"),
                  (f"  Footprint library: {pkg.pcblib or 'NOT FOUND'}\n", "" if pkg.pcblib else "err")]
@@ -446,7 +448,43 @@ class App:
                              " - several, so none is attached automatically\n"), ""))
         for n in pkg.notes:
             lines.append(("  Note: " + n + "\n", "warn"))
+        part_id = _package_part_id(pkg) if self._step_file else None
+        if part_id and all(self._cse_login):
+            # SamacSys/CSE (also via Mouser): the STEP needs CSE's rotation/offset - not in the zip
+            email, password = self._cse_login
+
+            def task():
+                try:
+                    return CseClient(email, password).placement(part_id), ""
+                except CseError as e:            # not fatal: the part is still imported
+                    return None, str(e)
+
+            def done(result):
+                place, err = result
+                self._step_place = place
+                if place is not None:
+                    lines.append(("  3D placement from Component Search Engine: "
+                                  f"{place.describe()}\n", "ok"))
+                else:
+                    lines.append(("  Could not get the 3D placement from Component Search "
+                                  f"Engine{': ' + err if err else ''}. The model will be placed "
+                                  "at the footprint origin, unrotated - check the 3D view.\n",
+                                  "warn"))
+                self._set_info(lines)
+                self._continue_auto_import(pkg)
+
+            self._set_info(lines)
+            self._run_bg("Getting the 3D model placement from Component Search Engine...",
+                         task, done)
+            return
+        if part_id:
+            lines.append(("  Sign in under Settings > Component Search Engine so the app can get "
+                          "this part's exact 3D placement. Without it the model is placed at the "
+                          "footprint origin, unrotated - check the 3D view.\n", "warn"))
         self._set_info(lines)
+        self._continue_auto_import(pkg)
+
+    def _continue_auto_import(self, pkg) -> None:
         if self._auto_import_next:
             self._auto_import_next = False
             if pkg.schlib and pkg.pcblib:
@@ -487,6 +525,7 @@ class App:
             self.settings.set(key, path)
         else:
             self._step_file = ""          # a hand-picked source: no package STEP
+            self._step_place = None
 
     # ================= component choice (multi-part source libraries) =================
     def _refresh_components(self, prefer: str = "") -> None:
@@ -957,6 +996,11 @@ class App:
             source_label=Path(self.src_sch.get()).parent.name if self.src_sch.get() else "",
             component="" if self.comp_var.get() == ALL_COMPONENTS else self.comp_var.get(),
             step_file=self._step_file if os.path.isfile(self._step_file) else "")
+        if req.step_file and self._step_place is not None:
+            pl = self._step_place
+            req.step_placement = (pl.rot_x, pl.rot_y, pl.rot_z, pl.x_mm, pl.y_mm, pl.z_mm)
+            req.step_placement_note = ("placed as Component Search Engine specifies: "
+                                       + pl.describe())
         if not req.component and len(self.comp_box["values"]) > 1 \
                 and self.comp_var.get() != ALL_COMPONENTS:
             messagebox.showerror("Cannot import", "Choose the component to import (the source "
@@ -1069,3 +1113,13 @@ def run_gui(settings: Settings, creds: CredentialStore, db: Database, providers:
             pass
     App(root, settings, creds, db, providers)
     root.mainloop()
+
+
+def _package_part_id(pkg) -> int | None:
+    """CSE part ID from the package's .epw (SamacSys downloads, also via Mouser), else None."""
+    for epw in pkg.epw_files:
+        try:
+            return parse_epw(epw.read_text(encoding="utf-8", errors="replace")).part_id
+        except (CseError, OSError):
+            continue
+    return None

@@ -9,6 +9,7 @@ Protocol (verified live 2026-11-19: 401 without login, login accepted with a rea
      authentication (the user's CSE email and password). Without valid credentials the server
      answers 401 with WWW-Authenticate: Basic realm="Samacsys Parts Database" (observed).
      With them it returns the part's model zip (one folder per ECAD format + 3D).
+  3. The 3D placement (rotation/offset) is not in the zip - see placement() below.
 The user stated (2026-11-19) that they have the owner's permission to use this access.
 
 Security: credentials go only to https://componentsearchengine.com - redirects are refused, so
@@ -271,6 +272,64 @@ class CseClient:
                            "account choose Altium Designer as your ECAD tool, then retry. "
                            f"Saved: {target}")
         return target
+
+
+    def placement(self, part_id: int) -> "StepPlacement | None":
+        """3D model placement CSE stores for the part (None if it has no STEP placement)."""
+        with self._open(url=PLACEMENT_URL.format(int(part_id))) as resp:
+            text = resp.read(MAX_BUILD_SCRIPT).decode("utf-8", "replace")
+        if text.lstrip().startswith("Error:"):
+            raise CseError("Component Search Engine: " + text.strip()[len("Error:"):].strip()[:200])
+        return parse_placement(text)
+
+
+# ----------------------------------------------------------------------------- 3D placement
+# CSE does not store the STEP placement in the zip: the zip's PcbLib has no 3D body and its
+# STEP is in the manufacturer's own axes (e.g. a chip resistor modelled lying on its side).
+# The placement comes from the part's build script, the text file the SamacSys Library
+# Loader for Altium requests (model.php with st=4&lt=4&pi=2; observed in that loader's
+# published script, verified live 2026-11-20). One line of it reads
+#   AssignSTEPmodel, <file>.stp, <RotX>, <RotY>, <RotZ>, <X mm>, <Y mm>, <Z mm>
+# e.g. CRCW08051R00FNEB: 90, 0, 0, 1, 0.63, 0 - without it the model is 90 deg off and
+# shifted. Only that line is used; the rest of the script is ignored.
+PLACEMENT_URL = f"https://ad.{HOST}/ga/model.php?partID={{}}&st=4&lt=4&pi=2"
+MAX_BUILD_SCRIPT = 4 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class StepPlacement:
+    step_name: str
+    rot_x: float
+    rot_y: float
+    rot_z: float
+    x_mm: float
+    y_mm: float
+    z_mm: float
+
+    @property
+    def is_identity(self) -> bool:
+        return not any((self.rot_x, self.rot_y, self.rot_z, self.x_mm, self.y_mm, self.z_mm))
+
+    def describe(self) -> str:
+        return (f"rotation X {self.rot_x:g}, Y {self.rot_y:g}, Z {self.rot_z:g} deg; offset "
+                f"X {self.x_mm:g}, Y {self.y_mm:g}, Z {self.z_mm:g} mm")
+
+
+def parse_placement(text: str) -> StepPlacement | None:
+    """The AssignSTEPmodel line of a CSE build script, or None if there is none/it is invalid."""
+    import math
+    for line in text.replace("\r", "").split("\n"):
+        cells = [c.strip() for c in line.split(",")]
+        if len(cells) < 8 or cells[0] != "AssignSTEPmodel":
+            continue
+        try:
+            nums = [float(c) for c in cells[2:8]]
+        except ValueError:
+            return None
+        if not all(math.isfinite(n) for n in nums) or any(abs(n) > 1000 for n in nums):
+            return None                       # mm / degrees: anything larger is not a placement
+        return StepPlacement(Path(cells[1]).name, *nums)
+    return None
 
 
 def _is_zip_ok(data: bytes) -> bool:

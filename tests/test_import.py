@@ -4,7 +4,8 @@ import zipfile
 from pathlib import Path
 
 from alm.altium import bridge
-from alm.importer import ImportRequest, finish_values, job_values, validate
+from alm.importer import (ImportRequest, finish_values, job_values, placement_values,
+                          validate)
 from alm.sources import UnsafeArchive, resolve_source
 from alm.validation import OLE_MAGIC
 
@@ -90,6 +91,21 @@ class JobTests(TmpCase):
         v = job_values(ImportRequest("a", "b", "c", "d", component="U1", step_file="m.stp"))
         self.assertEqual((v["Component"], v["KeepOpen"], v["StepFile"]), ("U1", "1", "m.stp"))
 
+    def test_placement_values_are_integers(self):
+        # CRCW08051R00FNEB as CSE specifies it: rot X 90, offset 1 / 0.63 mm
+        v = job_values(ImportRequest("a", "b", "c", "d", step_file="m.stp",
+                                     step_placement=(90, 0, 0, 1, 0.63, 0)))
+        self.assertEqual((v["StepRotX"], v["StepRotY"], v["StepRotZ"]), ("90000", "0", "0"))
+        self.assertEqual((v["StepDX"], v["StepDY"], v["StepDZ"]), ("393701", "248031", "0"))
+        self.assertEqual(placement_values(None)["StepDX"], "0")
+        self.assertEqual(placement_values((0, 0, -90.5, -0.1, 0, 0.2))["StepRotZ"], "-90500")
+
+    def test_placement_note_in_summary(self):
+        r = bridge.parse_result("STATUS=OK\nADDED_3D=FP1|part.stp\nEND=1")
+        self.assertIn("unrotated", r.summary())
+        r.placement_note = "placed as CSE specifies"
+        self.assertIn("(placed as CSE specifies)", r.summary())
+
     def test_added_3d_is_reported(self):
         r = bridge.parse_result("STATUS=OK\nADDED_3D=FP1|part.stp\nEND=1")
         self.assertEqual(r.added_3d, [("FP1", "part.stp")])
@@ -130,6 +146,13 @@ class SourceResolutionTests(TmpCase):
         pkg = resolve_source(self.dir / "P.LibPkg", self.dir / "x")
         self.assertEqual((pkg.schlib, pkg.pcblib), (sch, pcb))
         self.assertEqual(len(pkg.step_files), 1)
+
+    def test_epw_files_are_listed(self):
+        make_lib(self.dir / "P.SchLib")
+        make_lib(self.dir / "P.PcbLib")
+        (self.dir / "P.epw").write_text("17641087\nmpn=P\n", encoding="utf-8")
+        pkg = resolve_source(self.dir / "P.SchLib", self.dir / "x")
+        self.assertEqual([e.name for e in pkg.epw_files], ["P.epw"])
 
     def test_schlib_finds_sibling_pcblib(self):
         sch = make_lib(self.dir / "A.SchLib")

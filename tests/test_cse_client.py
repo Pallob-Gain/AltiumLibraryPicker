@@ -192,5 +192,53 @@ class ClientTests(unittest.TestCase):
             h.redirect_request(None, None, 302, "Found", {}, "https://evil.example/")
 
 
+
+
+BUILD_SCRIPT = ("CRCW08051R00FNEB\r\nCreateFootprintInLib, RESC2012X50N, \r\n"
+                "CreateRectangularSMD, -0.95, 0, 0.95, 1.45, 0, 1, 0, 90\r\n"
+                "AssignSTEPmodel, CRCW08051R00FNEB.stp, 90, 0, 0, 1, 0.6299999952316284, 0\r\n"
+                "CreateComponentInLib, CRCW08051R00FNEB, Resistor, R?\r\n")
+
+
+class PlacementTests(unittest.TestCase):
+    def test_parse(self):
+        p = cc.parse_placement(BUILD_SCRIPT)
+        self.assertEqual(p.step_name, "CRCW08051R00FNEB.stp")
+        self.assertEqual((p.rot_x, p.rot_y, p.rot_z, p.x_mm, p.z_mm), (90, 0, 0, 1, 0))
+        self.assertAlmostEqual(p.y_mm, 0.63, places=5)
+        self.assertFalse(p.is_identity)
+        self.assertTrue(cc.parse_placement("AssignSTEPmodel, a.stp, 0, 0, 0, 0, 0, 0").is_identity)
+
+    def test_parse_rejects_bad_or_missing(self):
+        self.assertIsNone(cc.parse_placement("CreateFootprintInLib, X, "))
+        self.assertIsNone(cc.parse_placement("AssignSTEPmodel, a.stp, 90, 0, x, 0, 0, 0"))
+        self.assertIsNone(cc.parse_placement("AssignSTEPmodel, a.stp, 90, 0, 0, 1e9, 0, 0"))
+        self.assertIsNone(cc.parse_placement("AssignSTEPmodel, a.stp, nan, 0, 0, 0, 0, 0"))
+        self.assertEqual(cc.parse_placement("AssignSTEPmodel, ../../a.stp, 0, 0, 0, 0, 0, 0"
+                                            ).step_name, "a.stp")
+
+    def test_placement_request(self):
+        seen = {}
+        client = cc.CseClient("me@example.com", "pw")
+
+        def fake_open(req, timeout):
+            seen["url"], seen["auth"] = req.full_url, req.get_header("Authorization")
+            return FakeResp(BUILD_SCRIPT.encode(), {"Content-Type": "text/plain;charset=UTF-8"})
+        with mock.patch.object(cc._opener, "open", side_effect=fake_open):
+            p = client.placement(17641087)
+        self.assertEqual(seen["url"], "https://ad.componentsearchengine.com/ga/model.php?"
+                                      "partID=17641087&st=4&lt=4&pi=2")
+        self.assertTrue(seen["auth"].startswith("Basic "))
+        self.assertEqual(p.rot_x, 90)
+
+    def test_placement_server_error(self):
+        resp = FakeResp(b"Error: Data entry for this part ID is not yet complete.",
+                        {"Content-Type": "text/plain"})
+        with mock.patch.object(cc._opener, "open", side_effect=[resp]):
+            with self.assertRaises(cc.CseError) as ctx:
+                cc.CseClient("a", "b").placement(1)
+        self.assertIn("not yet complete", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

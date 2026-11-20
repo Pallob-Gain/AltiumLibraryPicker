@@ -79,7 +79,7 @@ The **Celestial Library** button opens the setup guide. Its licence allows comme
 
 - **Backup:** both destination libraries are copied to `%APPDATA%\AltiumLibraryManager\backups\` first.
 - **Copy:** the symbol and its footprint are copied into your libraries, and the footprint is **linked** to the symbol.
-- **3D:** the 3D model is attached when the download has one but the footprint doesn't, as with Mouser and SamacSys parts.
+- **3D:** the 3D model is attached when the download has one but the footprint doesn't, as with Mouser and SamacSys parts. For Component Search Engine and Mouser parts, the app gets the model's **rotation and offset** from Component Search Engine (the same data the SamacSys Library Loader uses), so the model sits correctly on the pads. This needs your CSE login (Settings → Component Search Engine); without it the model is placed at the footprint origin, unrotated.
 - **Parameters:** `Manufacturer`, `Manufacturer Part Number`, `Datasheet`, `LCSC Part #` and Description are set. An empty field leaves the library's own value alone.
 - **Checks:** pin and footprint counts must match, otherwise **nothing is saved**. Every pin number must have a matching pad; this is an automatic check only, so still compare pin functions with the datasheet.
 - **Ready to place:** the app confirms Altium can find the new footprint immediately, with no restart. Libraries you had open in Altium are closed during the import and reopened afterwards.
@@ -101,8 +101,8 @@ Everything is reported in **Messages**: green is OK, orange is a warning, red is
 | CSE keeps showing its login page | Use **Get from CSE (direct)**, which needs no browser, or the **Mouser** button, which gives the same files. |
 | "Component Search Engine rejected the email/password" | Re-enter them under **Settings → Component Search Engine… → Sign in & test**. |
 | Mouser search says "Not configured" | Add your own Mouser API key in **Settings → API keys…**. The import works without a key. |
-| The 3D model sits in the wrong place | Open the footprint in Altium, press **3**, and move or rotate the 3D body. Downloaded models are placed at the footprint origin. |
-| A footprint looks **empty** (it has pads in the list, but you see nothing) | This was caused by version 1.1.0 or earlier: the 3D model was placed far away. In the PCB Library panel, delete that footprint and its symbol, then import the part again with 1.1.1 or newer. |
+| The 3D model sits in the wrong place (rotated or shifted) | Versions 1.1.1 and older did not apply Component Search Engine's rotation/offset. Delete the footprint and symbol, sign in under **Settings → Component Search Engine**, and import again with 1.1.2 or newer. For other sources, open the footprint in Altium, press **3**, and move or rotate the 3D body. |
+| A footprint looks **empty** (it has pads in the list, but you see nothing), or the linked footprint does not show until Altium is restarted | Fixed in 1.1.2. With 1.1.1 or older, if the PcbLib was open in Altium during the import, Altium showed the new footprint shifted 50,000 mil away until a restart, and **saving the PcbLib in that state made the shift permanent**. Delete such footprints and their symbols, then import them again with 1.1.2 or newer. |
 
 Your data lives in `%APPDATA%\AltiumLibraryManager\` (settings, encrypted logins, backups, log file `alm.log`). Open it with **Settings → Open data folder**. To uninstall, delete the `.exe` and that folder.
 

@@ -150,8 +150,9 @@ begin
 end;
 
 { Attach a STEP file as 3D body to a footprint that has none (SamacSys ships the STEP separately).
-  Body creation follows EasyEDA-Importer's verified BuildFootprint code. Placed at the footprint
-  origin, unrotated - the user must check the 3D view.
+  Body creation follows EasyEDA-Importer's verified BuildFootprint code. Rotation/offset come
+  from the job (StepRot*/StepD*, CSE's own placement for the part); without them the model is
+  placed at the footprint origin, unrotated.
   Called on the SOURCE footprint (a temporary extracted copy, never saved): a body created by
   script directly in an existing destination library reloads 50000 mil away at absolute (0,0)
   (verified AD26), while bodies brought over by the normal copy (Replicate) reload correctly. }
@@ -181,13 +182,17 @@ begin
       Body.SetState_FromModel;
     except
     end;
-    Model.SetState(0, 0, 0, 0);
+    { provider placement (CSE build script): rotations in milli-degrees, Z offset in coords }
+    Model.SetState(StrToIntDef(JobVal('StepRotX'), 0) / 1000, StrToIntDef(JobVal('StepRotY'), 0) / 1000,
+                   StrToIntDef(JobVal('StepRotZ'), 0) / 1000, StrToIntDef(JobVal('StepDZ'), 0));
     Body.Model := Model;
     try
       Body.SetState_FromModel;
     except
     end;
-    Body.MoveByXY(Lib.Board.XOrigin, Lib.Board.YOrigin);   { model arrives at absolute (0,0) }
+    { model arrives at absolute (0,0); StepDX/DY = provider offset from the footprint origin }
+    Body.MoveByXY(Lib.Board.XOrigin + StrToIntDef(JobVal('StepDX'), 0),
+                  Lib.Board.YOrigin + StrToIntDef(JobVal('StepDY'), 0));
     Fp.AddPCBObject(Body);       { footprint only: also adding to Lib.Board duplicated it }
     PCBServer.SendMessageToRobots(Fp.I_ObjectAddress, c_Broadcast, PCBM_BoardRegisteration, Body.I_ObjectAddress);
     Result := True;
@@ -538,8 +543,8 @@ end;
   if the library was open in an editor while being saved. Otherwise the new footprint stays
   "not found" until Altium restarts. So an import is separate runs:
   Action=prepare (close destinations open in an editor), Action=import with KeepOpen=1 (save, leave
-  loaded), Action=finish (check the library search, close the hidden libraries with CloseDocs=1,
-  reopen what the user had open). }
+  loaded), Action=finish (check the library search, close the libraries with CloseDocs=1),
+  Action=reopen (open what the user had open, fresh from disk). }
 procedure DoPrepare;
 var
   DSch, DPcb : IServerDocument;
@@ -580,14 +585,26 @@ begin
     if Found <> '' then Res.Add('VERIFY_CACHE=' + Fp + '|ok')
     else Res.Add('VERIFY_CACHE=' + Fp + '|not found');
   end;
-  Step := 'reopen';
+  { Always close the libraries the import left loaded - also those the user had open; Action=reopen
+    loads those again FROM DISK in a later run. Showing the import's own in-memory copy instead
+    shifts each new footprint by the library origin (50000 mil) in memory (verified AD26
+    2026-11-20): it looks empty until Altium restarts, and saving it then would break the file. }
+  Step := 'close';
   if JobVal('CloseDocs') = '1' then
   begin
     D := Client.GetDocumentByPath(JobVal('DestSchLib'));
-    if (D <> nil) and (JobVal('ReopenSch') <> '1') then Client.CloseDocument(D);
+    if D <> nil then Client.CloseDocument(D);
     D := Client.GetDocumentByPath(JobVal('DestPcbLib'));
-    if (D <> nil) and (JobVal('ReopenPcb') <> '1') then Client.CloseDocument(D);
+    if D <> nil then Client.CloseDocument(D);
   end;
+end;
+
+{ Separate run after finish (Altium completes closing only when a script run ends). }
+procedure DoReopen;
+var
+  D : IServerDocument;
+begin
+  Step := 'reopen';
   if JobVal('ReopenSch') = '1' then
   begin
     D := Client.OpenDocument('SCHLIB', JobVal('DestSchLib'));
@@ -715,6 +732,7 @@ begin
       if JobVal('Action') = 'extract' then DoExtract
       else if JobVal('Action') = 'prepare' then DoPrepare
       else if JobVal('Action') = 'finish' then DoFinish
+      else if JobVal('Action') = 'reopen' then DoReopen
       else DoImport;
     except
       Fail('Script exception during step: ' + Step);

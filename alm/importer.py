@@ -28,6 +28,10 @@ class ImportRequest:
     source_label: str = ""
     component: str = ""            # '' = every symbol in the source SchLib
     step_file: str = ""            # STEP attached to new footprints that have no 3D body
+    # its placement relative to the footprint origin, from the provider (CSE build script):
+    # (rot X, rot Y, rot Z in degrees, X, Y, Z in mm); None = origin, unrotated
+    step_placement: tuple[float, float, float, float, float, float] | None = None
+    step_placement_note: str = ""  # shown in the report, e.g. "placed as CSE specifies: ..."
 
 
 def validate(req: ImportRequest) -> list[str]:
@@ -70,12 +74,24 @@ def job_values(req: ImportRequest) -> dict[str, str]:
               "Description": req.description, "Component": req.component,
               "StepFile": req.step_file,
               "KeepOpen": "1"}   # leave saved libs loaded; 'finish' closes them (see run_import)
+    values.update(placement_values(req.step_placement))
     names = [n for n in STANDARD_PARAMS] + [n for n in req.params if n not in STANDARD_PARAMS]
     values["ParamCount"] = str(len(names))
     for i, name in enumerate(names, 1):
         values[f"Param{i}Name"] = name
         values[f"Param{i}Value"] = req.params.get(name, "")
     return values
+
+
+COORD_PER_MM = 10000 / 0.0254       # Altium internal units: 10000 per mil
+
+
+def placement_values(p) -> dict[str, str]:
+    """Integers only (milli-degrees, Altium coords): DelphiScript float parsing is locale-bound."""
+    rx, ry, rz, x, y, z = p if p is not None else (0, 0, 0, 0, 0, 0)
+    return {"StepRotX": str(round(rx * 1000)), "StepRotY": str(round(ry * 1000)),
+            "StepRotZ": str(round(rz * 1000)), "StepDX": str(round(x * COORD_PER_MM)),
+            "StepDY": str(round(y * COORD_PER_MM)), "StepDZ": str(round(z * COORD_PER_MM))}
 
 
 def run_import(req: ImportRequest, x2: Path, work_dir: Path,
@@ -108,6 +124,8 @@ def run_import(req: ImportRequest, x2: Path, work_dir: Path,
         backups = backup([req.dest_schlib, req.dest_pcblib], work_dir / "backups")
         report = bridge.run_job(x2, work_dir, job_values(req), timeout)
         report.backups = backups
+        if req.step_placement is not None:
+            report.placement_note = req.step_placement_note or "placed as the provider specifies"
     finally:
         # 3) finish (always): check Altium's library search, close the hidden libraries,
         #    reopen what the user had open
@@ -133,6 +151,12 @@ def _finish(req, prep, report, x2, work_dir, timeout) -> None:
         fin = bridge.run_job(x2, work_dir, finish_values(req, prep, report), timeout)
         report.cache = fin.cache
         report.warnings += fin.errors + fin.warnings
+        values = finish_values(req, prep, report)
+        if "1" in (values["ReopenSch"], values["ReopenPcb"]):
+            # reopen FROM DISK in a new run, once Altium has finished closing (see DoFinish)
+            time.sleep(1.5)
+            again = bridge.run_job(x2, work_dir, {**values, "Action": "reopen"}, timeout)
+            report.warnings += again.errors + again.warnings
     except bridge.AltiumError as e:
         report.warnings.append(f"Could not check Altium's library search / reopen libraries: {e}")
 

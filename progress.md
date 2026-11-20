@@ -10,6 +10,38 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-20 — v1.1.2: correct 3D placement + footprint visible without restart ✅
+
+### 1. 3D model misaligned (rotated / shifted)
+- **Cause:** CSE's zip has no 3D placement; its STEP files use the manufacturer's axes. The SamacSys Library Loader for Altium gets the placement from the part's build script, requested as `ad.componentsearchengine.com/ga/model.php?partID=<id>&st=4&lt=4&pi=2` (Basic auth). One line of that script reads `AssignSTEPmodel, <file>.stp, RotX, RotY, RotZ, X mm, Y mm, Z mm`. This was learned from that loader's published script and verified live. For example, CRCW08051R00FNEB is `90, 0, 0, 1, 0.63, 0`.
+- **Fix:**
+  - `CseClient.placement()` and `parse_placement()` (original code; only that one line is used).
+  - The app reads the part ID from the package's `.epw`, which covers CSE direct, CSE in the browser and Mouser zips. It fetches the placement when signed in.
+  - The placement goes to the job as integers (`StepRot*` in milli-degrees, `StepD*` in Altium coordinates, because DelphiScript float parsing depends on the locale).
+  - `AttachStep` applies it with `Model.SetState(rx, ry, rz, dz)` plus `MoveByXY(origin + dx, origin + dy)`.
+- **Verified after reopening from disk (AD26), CRCW08051R00FNEB:**
+  - Before: the body was at X −79…0, Y 0…18 mil and 49 mil tall (lying on its side).
+  - After: −39…+39 × −24…+25 mil, 18 mil (0.46 mm) tall, centred on the pads.
+  - Also verified end to end through the app (search → download → placement → import).
+
+### 2. Linked footprint not shown until Altium restart
+- **Cause (reproduced):** the destination PcbLib was open in Altium before the import, so it was reopened from the import's own in-memory document. In that document, Altium shows the new footprint shifted by the library origin (+50,000 mil; pads at +50,021 mil). The file on disk was correct, so a restart fixed it. **Saving the PcbLib in that state makes the shift permanent.** The user's `CAP_YX_5X11_RUB` in PCBLIB_LIPO_CHARGER is shifted on disk this way (found by a read-only scan of a copy).
+- **Fix:**
+  - `finish` now always closes the destination libraries.
+  - A new `reopen` action, in a separate Altium run, reopens the ones the user had open fresh from disk.
+- **Verified:**
+  - Library open before import: reopened, pads at ±58 mil, library search finds it.
+  - Library closed before import: stays closed, search finds it, correct when opened.
+
+### 3. Tests
+76 unit tests pass (placement parsing, request URL, server error, job values, `.epw` listing, report note).
+
+### 4. What you should do
+- In PCBLIB_LIPO_CHARGER, delete `CAP_YX_5X11_RUB` and the 50YXJ22MTA5X11 symbol, then import it again with 1.1.2.
+- Any part imported with 1.1.1 or older whose 3D model looks rotated or shifted: delete it and import again.
+
+---
+
 ## 2026-11-20 — v1.1.1: fix "empty footprint" after a 3D model was attached ✅
 
 - **Symptom** (RA1005F822CS, CRCW08051R00FNEB): the footprint showed nothing in the PCB library editor.

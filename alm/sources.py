@@ -25,6 +25,7 @@ class SourcePackage:
     pcblib: Path | None = None
     intlib: Path | None = None
     step_files: list[Path] = field(default_factory=list)
+    epw_files: list[Path] = field(default_factory=list)   # SamacSys part file (part ID)
     notes: list[str] = field(default_factory=list)
 
 
@@ -64,6 +65,8 @@ def _scan(folder: Path, pkg: SourcePackage) -> None:
             found[ext].append(p)
         elif ext in STEP_EXTS:
             pkg.step_files.append(p)
+        elif ext == ".epw" and p.stat().st_size < 1_000_000:
+            pkg.epw_files.append(p)
     for ext, attr in ((".schlib", "schlib"), (".pcblib", "pcblib"), (".intlib", "intlib")):
         items = sorted(found[ext])
         if items and getattr(pkg, attr) is None:
