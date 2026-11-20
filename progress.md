@@ -10,6 +10,13 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-20 — v1.4.0: Search from LCSC (no key), Mouser API removed ✅
+- **Request:** remove the Mouser API key and Mouser search, and search LCSC instead (the user has LCSC's permission), so others don't need a key.
+- **Provider:** `alm/providers/lcsc.py` uses the LCSC/JLCPCB public parts search (see `lcsc_lookup.fetch`). Each listing gives MPN, manufacturer (`ADI(Analog Devices)` → `Analog Devices`), package, stock, description, datasheet (the official link first, https only), LCSC page and C-number. Results are sorted by stock, so the best exact match is the most-stocked listing.
+- **UI:** the results columns are now Match, MPN, Manufacturer, Package, LCSC stock, Datasheet and LCSC #; the always-"?" Symbol/Footprint/3D columns are gone. Clicking an exact row also sets LCSC Part # and the EasyEDA box. LCSC Part # now comes from the search results, so there is no second request. CSE/SnapEDA manufacturer matching uses `lcsc_lookup.same_maker` ("Microchip Tech" = "Microchip Technology").
+- **Removed:** `alm/providers/mouser.py`, the Settings > API keys dialog and the Mouser tests; a saved `mouser_api_key` is deleted at startup. "Mouser (web)" stays as a site link. The always-shown "CAD availability unknown" warning is gone; the recommendation now points to the step-3 buttons.
+- **Verified:** 97 unit tests pass. A live search in the window for NE555DR gave 17 results, 3 exact (TI C7593 with 235,741 in stock, plus Youtai and TECH PUBLIC clones, flagged "Manufacturer ambiguous"), and LCSC Part # C7593 was filled. The CLI `python -m alm search` works with no key.
+
 ## 2026-11-20 — v1.3.0: From Ultra Librarian (browser download, automatic import) ⏳ needs a real download test
 - **Request:** Ultra Librarian like SnapEDA, for the 3D model, with the CAPTCHA automated or bypassed.
 - **Decision:** the app does NOT solve or bypass Ultra Librarian's reCAPTCHA. The adom chip-fetcher playbook we were pointed to drives a browser and solves the image challenges with AI vision and anti-detection tricks. That defeats the site's human check, so it is not in scope. Ultra Librarian has no public download API.

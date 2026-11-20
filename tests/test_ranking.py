@@ -8,7 +8,7 @@ def res(mpn, mfr="Maker", kind="api", **kw):
     return SearchResult(query="q", mpn=mpn, manufacturer=mfr, source="Src", source_kind=kind, **kw)
 
 
-OK = [ProviderStatus("Mouser API", ProviderState.OK, 1)]
+OK = [ProviderStatus("LCSC", ProviderState.OK, 1)]
 
 
 class NormalizeTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class RankTests(unittest.TestCase):
 
 class RecommendTests(unittest.TestCase):
     def test_no_provider_searched(self):
-        best, text = recommend("X", [], [ProviderStatus("Mouser API", ProviderState.NOT_CONFIGURED)])
+        best, text = recommend("X", [], [ProviderStatus("LCSC", ProviderState.NOT_CONFIGURED)])
         self.assertIsNone(best)
         self.assertIn("No provider was searched", text)
 
@@ -51,12 +51,12 @@ class RecommendTests(unittest.TestCase):
         self.assertIsNone(best)
         self.assertIn("No exact match", text)
 
-    def test_exact_recommendation_mentions_unknown_cad(self):
+    def test_exact_recommendation_points_to_cad_buttons(self):
         ranked = rank("ABC", [res("abc", datasheet_url="https://d")])
         best, text = recommend("ABC", ranked, OK)
         self.assertIsNotNone(best)
         self.assertIn("exact MPN match", text)
-        self.assertIn("unknown", text)
+        self.assertIn("Get from CSE", text)
 
     def test_ambiguous_manufacturer_and_similar_warnings(self):
         ranked = rank("ABC", [res("ABC", "Alpha"), res("ABC", "Beta"), res("ABC-TR", "Alpha")])

@@ -23,7 +23,6 @@ from ..db import Database
 from ..importer import ImportRequest, record_import, run_import, validate
 from ..models import ProviderState
 from ..providers.links import ALTIUM_MPS_HELP, MANUAL_SOURCES
-from ..providers.mouser import CRED_NAME as MOUSER_CRED
 from ..search import SearchOutcome, run_search
 from ..cse import (CSE_HOME, DownloadWatcher, claim, default_downloads_dir, human_size,
                    recent_download)
@@ -65,9 +64,9 @@ RECENT_DOWNLOAD_SECS = 30 * 60
 log = logging.getLogger(__name__)
 
 RESULT_COLUMNS = [  # id, heading, width
-    ("match", "Match", 135), ("mpn", "MPN", 170), ("mfr", "Manufacturer", 150),
-    ("source", "Source", 70), ("symbol", "Symbol", 66), ("footprint", "Footprint", 80),
-    ("model3d", "3D", 40), ("datasheet", "Datasheet", 88), ("supplier_pn", "Supplier P/N", 130),
+    ("match", "Match", 150), ("mpn", "MPN", 170), ("mfr", "Manufacturer", 150),
+    ("package", "Package", 150), ("stock", "LCSC stock", 85), ("datasheet", "Datasheet", 85),
+    ("supplier_pn", "LCSC #", 90),
 ]
 PARAM_FIELDS = ["Manufacturer", "Manufacturer Part Number", "Description", "Datasheet", "LCSC Part #"]
 LINK_MODES = {"Library file name (recommended)": "name", "Full library path": "path",
@@ -94,6 +93,11 @@ class App:
         self._snap_login = (creds.get(SNAP_USER), creds.get(SNAP_PASSWORD))
         self._snap: SnapClient | None = None     # signed-in SnapEDA session (memory only)
         self._ul_login = (creds.get(UL_EMAIL), creds.get(UL_PASSWORD))
+        try:                     # search uses LCSC now: delete a Mouser API key saved by <= 1.2
+            if creds.get("mouser_api_key"):
+                creds.set("mouser_api_key", "")
+        except Exception:
+            log.warning("Could not remove the old Mouser API key")
         self._queue: queue.Queue = queue.Queue()
         self._busy = False
         theme.apply(root)
@@ -111,7 +115,6 @@ class App:
 
         menubar = tk.Menu(r)
         m = tk.Menu(menubar, tearoff=False)
-        m.add_command(label="API keys...", command=self._api_keys_dialog)
         m.add_command(label="Component Search Engine...", command=self._cse_dialog)
         m.add_command(label="SnapEDA...", command=self._snap_dialog)
         m.add_command(label="Ultra Librarian...", command=self._ul_dialog)
@@ -343,41 +346,20 @@ class App:
             return
         self.settings.set("last_mpn", mpn)
 
-        def task():
-            box: dict = {}
+        self._run_bg(f"Searching '{mpn}'...",
+                     lambda: run_search(mpn, self.providers, MANUAL_SOURCES),
+                     lambda o: (self._show_outcome(o), self._show_lcsc(o)))
 
-            def lcsc():                      # in parallel with the provider search
-                try:
-                    box["parts"] = lcsc_lookup.search(mpn)
-                except Exception as e:       # never stops the search
-                    log.warning("LCSC lookup failed: %s", e)
-                    box["error"] = str(e)
-            t = threading.Thread(target=lcsc, daemon=True)
-            t.start()
-            outcome = run_search(mpn, self.providers, MANUAL_SOURCES)
-            t.join(20)
-            return outcome, box
-
-        self._run_bg(f"Searching '{mpn}'...", task,
-                     lambda res: (self._show_outcome(res[0]), self._show_lcsc(res[0], res[1])))
-
-    def _show_lcsc(self, o: SearchOutcome, box: dict) -> None:
-        """Fill 'LCSC Part #' (and the EasyEDA box) from an exact-MPN JLCPCB/LCSC listing."""
-        if "error" in box:
-            self._append_info([(f"LCSC Part #: lookup failed - {box['error']}\n", "warn")])
-            return
-        parts = box.get("parts")
-        if parts is None:
-            self._append_info([("LCSC Part #: lookup did not answer in time.\n", "warn")])
-            return
+    def _show_lcsc(self, o: SearchOutcome) -> None:
+        """Fill 'LCSC Part #' (and the EasyEDA box) from an exact-MPN LCSC listing."""
+        if not any(s.provider == "LCSC" and s.state is ProviderState.OK for s in o.statuses):
+            return                                   # the search line shows the error
+        parts = [lcsc_lookup.LcscPart(r.lcsc, r.mpn, r.manufacturer, r.package, r.stock or 0)
+                 for r in o.results if r.source == "LCSC" and r.lcsc and r.match.name == "EXACT"]
         maker = self.param_vars["Manufacturer"].get().strip()
         best = lcsc_lookup.pick(parts, maker)
         if not best:
-            if parts:
-                self._append_info([("LCSC Part #: not filled - LCSC lists "
-                                    + ", ".join(f"{p.code} ({p.manufacturer})" for p in parts[:4])
-                                    + f" under another manufacturer than '{maker}'.\n", "warn")])
-            else:
+            if not parts:
                 self._append_info([(f"LCSC Part #: {o.query} is not sold by LCSC.\n", "")])
             return
         top = best[0]
@@ -385,7 +367,7 @@ class App:
             self.param_vars["LCSC Part #"].set(top.code)
         self.lcsc_var.set(top.code)                 # ready for 'EasyEDA by LCSC #: Fetch'
         line = (f"LCSC Part #: {top.code} ({top.manufacturer}"
-                + (f", {top.package}" if top.package else "") + f", stock {top.stock})")
+                + (f", {top.package}" if top.package else "") + f", stock {top.stock:,})")
         if len(best) > 1:
             line += " - other listings: " + ", ".join(p.code for p in best[1:5])
         self._append_info([(line + "\n", "ok")])
@@ -396,8 +378,9 @@ class App:
         for i, res in enumerate(o.results):
             self.tree.insert("", "end", iid=str(i),
                              tags=("exact" if res.match.name == "EXACT" else "similar",),
-                             values=(res.match.value, res.mpn, res.manufacturer, res.source,
-                                     res.symbol.value, res.footprint.value, res.model3d.value,
+                             values=(res.match.value, res.mpn, res.manufacturer,
+                                     res.package or "-",
+                                     "-" if res.stock is None else f"{res.stock:,}",
                                      "Yes" if res.datasheet_url else "-", res.supplier_pn))
         api = [s for s in o.statuses if s.state is not ProviderState.MANUAL]
         self.search_info.configure(text="  ".join(
@@ -441,7 +424,11 @@ class App:
         self.param_vars["Manufacturer Part Number"].set(res.mpn)
         self.param_vars["Description"].set(res.description)
         self.param_vars["Datasheet"].set(res.datasheet_url)
-        self.status_var.set(f"Parameters filled from {res.source} result.")
+        if res.lcsc:
+            self.param_vars["LCSC Part #"].set(res.lcsc)
+            self.lcsc_var.set(res.lcsc)
+        self.status_var.set(f"Parameters filled from {res.source} result"
+                            + (f" ({res.lcsc})." if res.lcsc else "."))
 
     # ================= sites =================
     def _current_mpn(self) -> str | None:
@@ -780,8 +767,8 @@ class App:
                     "")])
             self.status_var.set(f"No exact CSE model for {mpn}.")
             return
-        want_mfr = self.param_vars["Manufacturer"].get().strip().lower()
-        same_mfr = [p for p in exact if want_mfr and p.manufacturer.lower() == want_mfr]
+        want_mfr = self.param_vars["Manufacturer"].get().strip()
+        same_mfr = [p for p in exact if lcsc_lookup.same_maker(p.manufacturer, want_mfr)]
         if len(exact) == 1:
             self._cse_direct_download(exact[0])
         elif len(same_mfr) == 1:
@@ -1161,9 +1148,8 @@ class App:
                     "")])
             self.status_var.set(f"No exact SnapEDA model for {mpn}.")
             return
-        want_mfr = self.param_vars["Manufacturer"].get().strip().lower()
-        same_mfr = [p for p in exact if want_mfr and (p.manufacturer.lower() == want_mfr or
-                                                       p.manufacturer.lower().startswith(want_mfr + " "))]
+        want_mfr = self.param_vars["Manufacturer"].get().strip()
+        same_mfr = [p for p in exact if lcsc_lookup.same_maker(p.manufacturer, want_mfr)]
         if len(exact) == 1:
             self._snap_download(exact[0])
         elif len(same_mfr) == 1:
@@ -1413,36 +1399,6 @@ class App:
         for text, tag in parts:
             self.info.insert("end", text, tag)
         self.info.configure(state="disabled")
-
-    def _api_keys_dialog(self) -> None:
-        dlg = tk.Toplevel(self.root)
-        dlg.title("API keys")
-        dlg.transient(self.root)
-        dlg.grab_set()
-        frm = ttk.Frame(dlg, padding=10)
-        frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text="Mouser Search API key:").grid(row=0, column=0, sticky="w")
-        var = tk.StringVar(value=self.creds.get(MOUSER_CRED))
-        ttk.Entry(frm, textvariable=var, width=48, show="*").grid(row=0, column=1, padx=4)
-        ttk.Button(frm, text="Get a key",
-                   command=lambda: webbrowser.open("https://www.mouser.com/api-search/")).grid(
-            row=0, column=2)
-        ttk.Label(frm, foreground="#555", text=(
-            "Stored encrypted for your Windows account (DPAPI). Leave blank and save to remove.\n"
-            f"The environment variable {CredentialStore.env_name(MOUSER_CRED)} overrides it.")).grid(
-            row=1, column=0, columnspan=3, sticky="w", pady=6)
-
-        def save():
-            try:
-                self.creds.set(MOUSER_CRED, var.get())
-            except Exception as e:
-                log.exception("Saving credential failed")
-                messagebox.showerror("Error", f"Could not save key: {e}", parent=dlg)
-                return
-            self.status_var.set("API key saved.")
-            dlg.destroy()
-
-        ttk.Button(frm, text="Save", command=save).grid(row=2, column=2, sticky="e")
 
 
 def run_gui(settings: Settings, creds: CredentialStore, db: Database, providers: list) -> None:

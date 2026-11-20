@@ -14,12 +14,12 @@ from .db import Database
 from .log import setup_logging
 from .models import ProviderState
 from .providers.links import MANUAL_SOURCES
-from .providers.mouser import MouserProvider
+from .providers.lcsc import LcscProvider
 from .search import run_search
 
 
 def build_providers(creds: CredentialStore) -> list:
-    return [MouserProvider(creds)]
+    return [LcscProvider()]
 
 
 def cli_search(mpn: str, creds: CredentialStore) -> int:

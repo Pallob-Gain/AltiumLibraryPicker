@@ -1,7 +1,7 @@
 """Credential store: values encrypted with Windows DPAPI (per Windows user account).
 
-Lookup order for a credential named e.g. "mouser_api_key":
-  1. environment variable ALM_MOUSER_API_KEY
+Lookup order for a credential named e.g. "cse_email":
+  1. environment variable ALM_CSE_EMAIL
   2. %APPDATA%\\AltiumLibraryManager\\credentials.json (DPAPI-encrypted, base64)
 Secrets are never logged.
 """

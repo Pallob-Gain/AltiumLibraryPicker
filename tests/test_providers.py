@@ -2,67 +2,56 @@ import unittest
 from unittest import mock
 
 from alm.models import Avail, ProviderState
-from alm.providers import mouser
+from alm.providers import lcsc
 from alm.providers.base import NotConfigured, ProviderError
 from alm.providers.links import MANUAL_SOURCES, ManualSource
 from alm.search import run_search
 
-# Shape of a Mouser Search API v1 response (values are fixture data, not real part data).
-MOUSER_FIXTURE = {
-    "Errors": [],
-    "SearchResults": {
-        "NumberOfResult": 3,
-        "Parts": [
-            {"ManufacturerPartNumber": "STM32F103C8T6", "Manufacturer": "STMicroelectronics",
-             "Description": "ARM Microcontrollers - MCU", "DataSheetUrl": "https://example.com/ds.pdf",
-             "ProductDetailUrl": "https://www.mouser.com/ProductDetail/x", "MouserPartNumber": "511-A",
-             "LifecycleStatus": None},
-            {"ManufacturerPartNumber": "STM32F103C8T6", "Manufacturer": "STMicroelectronics",
-             "MouserPartNumber": "511-B"},
-            {"ManufacturerPartNumber": "", "Manufacturer": "junk"},
-        ],
-    },
-}
+# Shape of an LCSC (JLCPCB parts search) reply (values are fixture data).
+def item(code, model, brand, stock, **kw):
+    d = {"componentCode": code, "componentModelEn": model, "componentBrandEn": brand,
+         "stockCount": stock, "componentSpecificationEn": "LQFP-48(7x7)",
+         "describe": "ARM  MCU   72MHz", "dataManualUrl": "https://www.lcsc.com/datasheet/x.pdf",
+         "lcscGoodsUrl": "https://www.lcsc.com/product-detail/x_C8734.html"}
+    d.update(kw)
+    return d
 
 
-class FakeCreds:
-    def __init__(self, values=None):
-        self.values = values or {}
+LCSC_FIXTURE = {"code": 200, "data": {"componentPageInfo": {"total": 4, "list": [
+    item("C8734", "STM32F103C8T6", "STMicroelectronics", 1200),
+    item("C77994", "STM32F103C8T6", "STMicroelectronics", 99000,
+         dataManualOfficialLink="https://www.st.com/ds.pdf", lcscGoodsUrl="javascript:alert(1)"),
+    item("C9999", "STM32F103C8T7", "ADI(Analog Devices)", 5, componentSpecificationEn="-"),
+    item("bad", "STM32F103C8T6", "STMicroelectronics", 1)]}}}
 
-    def get(self, name):
-        return self.values.get(name, "")
 
-
-class MouserParseTests(unittest.TestCase):
-    def test_parse_merges_duplicate_supplier_numbers(self):
-        out = mouser.parse_response("STM32F103C8T6", MOUSER_FIXTURE)
-        self.assertEqual(len(out), 1)
+class LcscParseTests(unittest.TestCase):
+    def test_rows_with_lcsc_number_stock_first(self):
+        out = lcsc.parse_response("STM32F103C8T6", LCSC_FIXTURE)
+        self.assertEqual([r.lcsc for r in out], ["C77994", "C8734", "C9999"])   # invalid code out
         r = out[0]
-        self.assertEqual(r.manufacturer, "STMicroelectronics")
-        self.assertEqual(r.supplier_pn, "511-A, 511-B")
-        self.assertEqual(r.datasheet_url, "https://example.com/ds.pdf")
-        self.assertIs(r.symbol, Avail.UNKNOWN)       # Mouser has no CAD info
-        self.assertEqual(r.lcsc, "")                  # never invented
+        self.assertEqual((r.source, r.supplier_pn, r.stock), ("LCSC", "C77994", 99000))
+        self.assertEqual(r.datasheet_url, "https://www.st.com/ds.pdf")   # official link first
+        self.assertEqual(r.source_url, "")                               # https only
+        self.assertEqual(r.description, "ARM MCU 72MHz")
+        self.assertIs(r.symbol, Avail.UNKNOWN)                           # no CAD info
+        self.assertEqual((out[2].manufacturer, out[2].package), ("Analog Devices", ""))
 
-    def test_errors_raise(self):
+    def test_error_reply_raises(self):
         with self.assertRaises(ProviderError):
-            mouser.parse_response("X", {"Errors": [{"Code": "Invalid", "Message": "Bad key"}]})
+            lcsc.parse_response("X", {"code": 500, "message": "busy"})
 
-    def test_empty_response(self):
-        self.assertEqual(mouser.parse_response("X", {"Errors": [], "SearchResults": None}), [])
+    def test_empty_reply(self):
+        self.assertEqual(lcsc.parse_response("X", {"code": 200, "data": {
+            "componentPageInfo": {"total": 0, "list": None}}}), [])
 
-    def test_not_configured(self):
-        with self.assertRaises(NotConfigured):
-            mouser.MouserProvider(FakeCreds()).search("X")
-
-    def test_request_shape(self):
-        p = mouser.MouserProvider(FakeCreds({"mouser_api_key": "k/ey"}))
-        with mock.patch.object(mouser, "http_json", return_value=MOUSER_FIXTURE) as m:
-            p.search("STM32F103C8T6")
-        url, payload = m.call_args.args
-        self.assertTrue(url.endswith("?apiKey=k%2Fey"))
-        self.assertEqual(payload["SearchByPartRequest"],
-                         {"mouserPartNumber": "STM32F103C8T6", "partSearchOptions": "Exact"})
+    def test_no_key_needed_and_network_error_is_provider_error(self):
+        p = lcsc.LcscProvider()
+        self.assertTrue(p.configured())
+        with mock.patch.object(lcsc.lcsc_lookup, "fetch",
+                               side_effect=lcsc.lcsc_lookup.LcscError("not reachable")):
+            with self.assertRaises(ProviderError):
+                p.search("X")
 
 
 class LinkTests(unittest.TestCase):
@@ -114,11 +103,12 @@ class SearchHonestyTests(unittest.TestCase):
             run_search("   ", [], [])
 
     def test_successful_provider(self):
-        parts = mouser.parse_response("STM32F103C8T6", MOUSER_FIXTURE)
+        parts = lcsc.parse_response("STM32F103C8T6", LCSC_FIXTURE)
         o = run_search("stm32f103c8t6", [_Prov(result=parts)], [])
-        self.assertEqual(o.exact_count, 1)
-        self.assertIs(o.best, parts[0])
-        self.assertEqual(o.statuses[0].count, 1)
+        self.assertEqual(o.exact_count, 2)                 # two LCSC listings of the MPN
+        self.assertIs(o.best, parts[0])                    # the one with the most stock
+        self.assertEqual(o.statuses[0].count, 3)
+        self.assertIn("99,000 in stock", o.recommendation)
 
 
 if __name__ == "__main__":

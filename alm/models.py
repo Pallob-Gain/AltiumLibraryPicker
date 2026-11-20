@@ -44,6 +44,7 @@ class SearchResult:
     supplier: str = ""
     supplier_pn: str = ""
     package: str = ""
+    stock: int | None = None        # distributor stock, None = not reported
     match: Match = Match.SIMILAR    # set by ranking
     score: int = 0                  # set by ranking
     notes: list[str] = field(default_factory=list)

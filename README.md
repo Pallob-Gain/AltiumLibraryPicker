@@ -60,7 +60,7 @@ In section **3. Import into Altium**, click **Select…** next to **Destination 
 **Step C (optional): add your other logins.**
 - **SnapEDA:** create a free account at [snapeda.com](https://www.snapeda.com/), then go to **Settings → SnapEDA…**, enter your login, tick **Remember login** and click **Sign in & test**.
 - **Ultra Librarian:** create a free account at [ultralibrarian.com](https://www.ultralibrarian.com/), then go to **Settings → Ultra Librarian…**, enter your login (or click **Use my SnapEDA login** if it is the same) and click **Save**. The app uses it to copy your email and password into Ultra Librarian's sign-in page with one click.
-- **Mouser API key:** this only fills the search table in step 2 of the window. Get a free key at [mouser.com/api-search](https://www.mouser.com/api-search/) and enter it under **Settings → API keys…**. Importing works without it.
+You don't need any key for **Search**: it uses LCSC's parts catalogue, which needs no account.
 
 The bottom-right corner of the window shows which logins are saved, for example *Logins: CSE, SnapEDA*.
 
@@ -69,9 +69,9 @@ The bottom-right corner of the window shows which logins are saved, for example 
 ## 4. Your first part, step by step
 
 1. In **1. Part number**, type or paste the manufacturer part number, for example `NE555DR`, and press **Search** (or Enter).
-   - The table shows what was found. A green row is an **exact** match.
-   - The **Component parameters** fields fill in, including **LCSC Part #** when LCSC sells that exact part.
-2. Check that **Manufacturer** is right. If the same part number exists from two manufacturers, this field decides which one you get.
+   - The app searches **LCSC's catalogue** (no account or key needed). The table shows each listing with its manufacturer, package, LCSC stock and LCSC number. A green row is an **exact** match of your part number; orange rows are similar but **different** parts.
+   - The **Component parameters** fields fill in from the best exact match (the original manufacturer, most in stock): Manufacturer, Description, Datasheet and **LCSC Part #**.
+2. Check that **Manufacturer** is right. Some part numbers are also made by other companies (clones). If Messages says "Manufacturer ambiguous", **click the row** of the manufacturer you want, and the fields and LCSC number switch to it. This field also decides which version the download buttons get.
 3. In **3. Import into Altium**, click **Get from CSE (direct)**.
 4. Wait a few seconds. The status line at the bottom shows the progress: searching, downloading, importing. If Altium shows a dialog, answer it.
 5. When **Messages** shows **Import finished** in green, the part is in your libraries. In Altium, open the **Components** panel, find the part in your library, and place it.
@@ -156,7 +156,7 @@ You can also just delete the new symbol and footprint in Altium.
 | SnapEDA says "too many requests" | Wait about 10 minutes, then try again. |
 | A download is not picked up | **Look for download** and **From Ultra Librarian** watch your normal Downloads folder. If your browser saves somewhere else, set that folder in **Settings → Component Search Engine…**. |
 | The 3D model is rotated or in the wrong place | Open the footprint in Altium, press **3**, and move or rotate the 3D body. CSE parts are placed automatically; this mostly affects other sources. |
-| The search table says Mouser is "Not configured" | That's fine. It only needs a Mouser API key (**Settings → API keys…**). Importing works without one. |
+| Search finds nothing, or says LCSC is not reachable | Check your internet connection. LCSC doesn't sell every part: if there's no exact match, you can still use the download buttons in step 3. They work with the part number alone. |
 | The LCSC Part # stays empty | LCSC doesn't sell that exact part number, or lists it under another manufacturer. You can type the number yourself. |
 
 **Your data** (settings, encrypted logins, backups, and the log file `alm.log`) lives in `%APPDATA%\AltiumLibraryManager\`. Open it with **Settings → Open data folder**. **To uninstall,** delete the `.exe` and that folder.
@@ -187,6 +187,6 @@ Contributions are welcome: fork the project, make your change, run the tests, an
 
 - The EasyEDA converter (`alm/easyeda/convert.py`) and part builder (`alm/altium/ee_build.pas`) come from [EasyEDA-Importer](https://github.com/hiteshwar/EasyEDA-Importer), by the same author.
 - The SnapEDA download method was learned from [datasheet-cli](https://github.com/akiselev/datasheet-cli) (GPL-3.0). No code was copied; `alm/snapeda_client.py` is an original implementation.
-- The LCSC number lookup uses JLCPCB's public parts search.
+- Search and the LCSC number lookup use the LCSC/JLCPCB public parts catalogue, with LCSC's permission.
 - Licensed under [MIT](LICENSE): free to use, copy, modify and share, including commercially, as long as you keep the licence notice. **No warranty.** Always check footprints and pinouts against the datasheet before ordering PCBs.
 - Not affiliated with Altium, Mouser, SamacSys/Supplyframe (Component Search Engine), SnapEDA/SnapMagic, Ultra Librarian, EasyEDA, LCSC or JLCPCB. Library data from those sites is subject to their own terms.

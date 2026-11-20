@@ -1,8 +1,9 @@
-"""LCSC part number (C-number) for a manufacturer part number.
+"""LCSC parts search (no key): part listings and LCSC numbers (C-numbers) for an MPN.
 
-Uses the public parts search of JLCPCB (LCSC's assembly service; same C-numbers). It is an
-undocumented web service, so a failure is reported as a note and never stops the search.
-Only listings whose MPN is EXACTLY the query (ranking.normalize_mpn) are used.
+Uses the public parts search of JLCPCB (LCSC's assembly service; same C-numbers and the same
+catalogue), used with LCSC's permission. It is an undocumented web service, so a failure is
+reported as a note and never stops the app. LCSC numbers are only taken from listings whose
+MPN is EXACTLY the query (ranking.normalize_mpn).
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ SEARCH_URL = ("https://jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/131.0.0.0 Safari/537.36")
 MAX_REPLY = 2_000_000
+PAGE_SIZE = 25
 _CODE = re.compile(r"^C\d{1,10}$")
 
 
@@ -33,36 +35,65 @@ class LcscPart:
     manufacturer: str
     package: str = ""
     stock: int = 0
+    description: str = ""
+    datasheet_url: str = ""
+    url: str = ""        # LCSC product page
+
+
+def _https(value) -> str:
+    v = str(value or "").strip()
+    return v if v.startswith("https://") and " " not in v else ""
+
+
+def clean_brand(name: str) -> str:
+    """'ADI(Analog Devices)' -> 'Analog Devices'; other names unchanged."""
+    name = (name or "").strip()
+    m = re.match(r"^([^()]{1,6})\(([A-Za-z][^()]+)\)$", name)
+    return m.group(2).strip() if m else name
+
+
+def items(reply: dict) -> list:
+    """The listing items of a JLCPCB search reply (LcscError if it is not a valid reply)."""
+    if reply.get("code") != 200:
+        raise LcscError(f"LCSC parts search answered: {reply.get('message') or reply.get('code')}")
+    data = reply.get("data")
+    page = data.get("componentPageInfo") if isinstance(data, dict) else None
+    found = page.get("list") if isinstance(page, dict) else None
+    if found is None:
+        found = []
+    if not isinstance(found, list) or not isinstance(page, dict):
+        raise LcscError("LCSC parts search sent an unexpected reply.")
+    return found
+
+
+def to_part(it) -> LcscPart | None:
+    """One listing, or None if it has no valid C-number / MPN."""
+    if not isinstance(it, dict):
+        return None
+    code = str(it.get("componentCode") or "").strip()
+    model = str(it.get("componentModelEn") or "").strip()
+    if not _CODE.match(code) or not model:
+        return None
+    try:
+        stock = int(it.get("stockCount") or 0)
+    except (TypeError, ValueError):
+        stock = 0
+    spec = str(it.get("componentSpecificationEn") or "").strip()
+    return LcscPart(code, model, clean_brand(str(it.get("componentBrandEn") or "")),
+                    "" if spec == "-" else spec, stock,
+                    " ".join(str(it.get("describe") or "").split())[:300],
+                    _https(it.get("dataManualOfficialLink")) or _https(it.get("dataManualUrl")),
+                    _https(it.get("lcscGoodsUrl")))
+
+
+def all_parts(reply: dict) -> list[LcscPart]:
+    return [p for p in (to_part(it) for it in items(reply)) if p]
 
 
 def parse_results(reply: dict, mpn: str) -> list[LcscPart]:
-    """Exact-MPN listings from a JLCPCB search reply."""
-    if reply.get("code") != 200:
-        raise LcscError(f"JLCPCB parts search answered: {reply.get('message') or reply.get('code')}")
-    data = reply.get("data")
-    page = data.get("componentPageInfo") if isinstance(data, dict) else None
-    items = page.get("list") if isinstance(page, dict) else None
-    if items is None:
-        items = []
-    if not isinstance(items, list) or not isinstance(page, dict):
-        raise LcscError("JLCPCB parts search sent an unexpected reply.")
+    """Exact-MPN listings from a search reply."""
     want = normalize_mpn(mpn)
-    out = []
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        code = str(it.get("componentCode") or "").strip()
-        model = str(it.get("componentModelEn") or "")
-        if not _CODE.match(code) or not want or normalize_mpn(model) != want:
-            continue
-        try:
-            stock = int(it.get("stockCount") or 0)
-        except (TypeError, ValueError):
-            stock = 0
-        spec = str(it.get("componentSpecificationEn") or "")
-        out.append(LcscPart(code, model, str(it.get("componentBrandEn") or ""),
-                            "" if spec == "-" else spec, stock))
-    return out
+    return [p for p in all_parts(reply) if want and normalize_mpn(p.mpn) == want]
 
 
 def _words(name: str) -> list[str]:
@@ -84,8 +115,10 @@ def pick(parts: list[LcscPart], manufacturer: str = "") -> list[LcscPart]:
     return sorted(parts, key=lambda p: p.stock, reverse=True)
 
 
-def search(mpn: str, timeout: float = 15) -> list[LcscPart]:
-    body = json.dumps({"keyword": mpn.strip(), "currentPage": 1, "pageSize": 25}).encode()
+def fetch(mpn: str, timeout: float = 15) -> dict:
+    """Raw search reply for a keyword."""
+    body = json.dumps({"keyword": mpn.strip(), "currentPage": 1,
+                       "pageSize": PAGE_SIZE}).encode()
     req = urllib.request.Request(SEARCH_URL, data=body, headers={
         "User-Agent": BROWSER_UA, "Content-Type": "application/json",
         "Accept": "application/json"})
@@ -93,13 +126,18 @@ def search(mpn: str, timeout: float = 15) -> list[LcscPart]:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read(MAX_REPLY + 1)
     except OSError as e:
-        raise LcscError(f"JLCPCB parts search is not reachable ({e}).") from None
+        raise LcscError(f"LCSC parts search is not reachable ({e}).") from None
     if len(raw) > MAX_REPLY:
-        raise LcscError("JLCPCB parts search reply is too large.")
+        raise LcscError("LCSC parts search reply is too large.")
     try:
         reply = json.loads(raw.decode("utf-8"))
     except ValueError:
-        raise LcscError("JLCPCB parts search sent an unexpected reply.") from None
+        raise LcscError("LCSC parts search sent an unexpected reply.") from None
     if not isinstance(reply, dict):
-        raise LcscError("JLCPCB parts search sent an unexpected reply.")
-    return parse_results(reply, mpn)
+        raise LcscError("LCSC parts search sent an unexpected reply.")
+    return reply
+
+
+def search(mpn: str, timeout: float = 15) -> list[LcscPart]:
+    """Exact-MPN listings for an MPN."""
+    return parse_results(fetch(mpn, timeout), mpn)

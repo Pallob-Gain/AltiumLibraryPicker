@@ -47,16 +47,15 @@ def warnings(query: str, ranked: list[SearchResult]) -> list[str]:
     makers = {r.manufacturer.strip().lower() for r in exact if r.manufacturer.strip()}
     if len(makers) > 1:
         names = sorted({r.manufacturer.strip() for r in exact if r.manufacturer.strip()})
-        out.append("Manufacturer ambiguous: the exact MPN is listed by " + ", ".join(names)
-                   + ". Verify the manufacturer before importing.")
+        listed = ", ".join(names)
+        out.append("Manufacturer ambiguous: the exact MPN is listed by " + listed
+                   + ("" if listed.endswith(".") else ".")
+                   + " Verify the manufacturer before importing (click a row to use it).")
     if similar:
         variants = sorted({r.mpn for r in similar})
         shown = ", ".join(variants[:8]) + (" ..." if len(variants) > 8 else "")
         out.append(f"{len(variants)} similar part number(s) found ({shown}). These are different "
                    "parts or package/packaging variants and must not be substituted.")
-    if exact and all(r.symbol is Avail.UNKNOWN and r.footprint is Avail.UNKNOWN for r in exact):
-        out.append("Symbol/footprint/3D availability is unknown from the automatically searched "
-                   "sources. Check the manual-assist sources.")
     return out
 
 
@@ -74,7 +73,9 @@ def recommend(query: str, ranked: list[SearchResult],
     best = exact[0]
     reasons = ["exact MPN match"]
     if best.source_kind == "api":
-        reasons.append("official API data")
+        reasons.append("distributor listing")
+    if best.stock:
+        reasons.append(f"{best.stock:,} in stock")
     if best.altium_native is Avail.YES:
         reasons.append("native Altium format")
     have = [n for n, a in (("symbol", best.symbol), ("footprint", best.footprint),
@@ -88,6 +89,6 @@ def recommend(query: str, ranked: list[SearchResult],
     unknown = [n for n, a in (("symbol", best.symbol), ("footprint", best.footprint),
                               ("3D", best.model3d)) if a is Avail.UNKNOWN]
     if unknown:
-        text += (" CAD availability (" + "/".join(unknown) + ") is unknown from this source - "
-                 "check SnapMagic, Ultra Librarian or Component Search Engine.")
+        text += (" Get the symbol, footprint and 3D model with the buttons in step 3 "
+                 "(start with Get from CSE).")
     return best, text
