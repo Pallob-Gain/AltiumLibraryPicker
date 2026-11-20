@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
@@ -31,6 +33,9 @@ from . import __version__
 
 HOST = "componentsearchengine.com"
 MODEL_URL = f"https://{HOST}/ga/model.php?partID="
+# MPN search used by SamacSys' Altium integration (verified live 2026-11-20): JSON
+# {"PartCount": n, "Parts": {"<id>": {"PartNumber", "Manufacturer", "ModelAvailable", ...}}}
+SEARCH_URL = f"https://ad.{HOST}/ga/search.php"
 USER_AGENT = f"AltiumLibraryManager/{__version__}"
 MAX_DOWNLOAD = 150 * 1024 * 1024
 CRED_EMAIL, CRED_PASSWORD = "cse_email", "cse_password"
@@ -107,6 +112,56 @@ def read_epw(path: Path) -> Epw | None:
         return parse_epw(z.read(info).decode("utf-8", "replace"))
 
 
+# ----------------------------------------------------------------------------- search
+@dataclass
+class CsePart:
+    part_id: int
+    mpn: str
+    manufacturer: str = ""
+    description: str = ""
+    datasheet: str = ""
+    model_available: bool = False
+    has_3d: bool = False
+    confidence: str = ""
+    package: str = ""
+    pins: str = ""
+
+
+def _s(v) -> str:
+    return "" if v in (None, "null") else str(v).strip()
+
+
+def parse_search(data) -> list[CsePart]:
+    """Parse search.php JSON. Raises CseError on an unexpected shape."""
+    if not isinstance(data, dict) or "PartCount" not in data:
+        raise CseError("Component Search Engine returned an unexpected search response.")
+    parts = data.get("Parts") or {}
+    if not isinstance(parts, dict):
+        return []
+    out = []
+    for key, p in parts.items():
+        if not isinstance(p, dict):
+            continue
+        pid = _s(p.get("PartID")) or str(key).removeprefix("pid")
+        if not pid.isdecimal():
+            continue
+        out.append(CsePart(
+            part_id=int(pid), mpn=_s(p.get("PartNumber")), manufacturer=_s(p.get("Manufacturer")),
+            description=_s(p.get("Description")), datasheet=_s(p.get("DatasheetURL")),
+            model_available=_s(p.get("ModelAvailable")) == "1" and bool(_s(p.get("Symbol")))
+            and bool(_s(p.get("Footprint"))),
+            has_3d=_s(p.get("Have3D")) == "1", confidence=_s(p.get("Confidence")),
+            package=_s(p.get("PackageCategory")), pins=_s(p.get("PinCount"))))
+    return out
+
+
+def exact_matches(parts: list[CsePart], mpn: str) -> list[CsePart]:
+    """Same MPN (case/whitespace-insensitive only - suffixes matter) with a downloadable model."""
+    from .ranking import normalize_mpn
+    want = normalize_mpn(mpn)
+    return [p for p in parts if normalize_mpn(p.mpn) == want and p.model_available]
+
+
 # ----------------------------------------------------------------------------- HTTP
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -140,8 +195,20 @@ class CseClient:
         self._auth = _auth_header(email, password)
         self.timeout = timeout
 
-    def _open(self, part_id: int):
-        req = urllib.request.Request(MODEL_URL + str(int(part_id)),
+    def search(self, mpn: str) -> list[CsePart]:
+        """All CSE parts for an MPN keyword (use exact_matches() to filter)."""
+        q = urllib.parse.urlencode({"kws": mpn.strip(), "v": 1})
+        with self._open(url=f"{SEARCH_URL}?{q}") as resp:
+            body = resp.read(5_000_000)
+        try:
+            data = json.loads(body.decode("utf-8", "replace"))
+        except ValueError:
+            raise CseError("Component Search Engine search did not return data. Sign in on "
+                           "componentsearchengine.com once in your browser, then retry.") from None
+        return parse_search(data)
+
+    def _open(self, part_id: int = 0, url: str = ""):
+        req = urllib.request.Request(url or MODEL_URL + str(int(part_id)),
                                      headers={"Authorization": self._auth,
                                               "User-Agent": USER_AGENT})
         try:

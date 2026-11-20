@@ -27,7 +27,7 @@ from ..providers.mouser import CRED_NAME as MOUSER_CRED
 from ..search import SearchOutcome, run_search
 from ..cse import CSE_HOME, DownloadWatcher, claim, default_downloads_dir, human_size
 from ..cse_client import (CRED_EMAIL, CRED_PASSWORD, CseAuthError, CseClient, CseError,
-                          read_epw)
+                          exact_matches, read_epw)
 from ..easyeda.fetch import UNOFFICIAL_NOTE, clean_lcsc, fetch_and_build
 from ..schlib_reader import best_match, list_symbols
 from ..sources import resolve_source
@@ -160,6 +160,9 @@ class App:
         ttk.Label(imp, text="Get it automatically:").grid(row=1, column=0, sticky="w")
         af = ttk.Frame(imp)
         af.grid(row=1, column=1, columnspan=2, sticky="w", pady=(0, 4))
+        self.cse_direct_btn = ttk.Button(af, text="Get from CSE (direct)",
+                                         command=self._cse_direct)
+        self.cse_direct_btn.pack(side="left", padx=(0, 4))
         self.mouser_btn = ttk.Button(af, text=WATCH_SITES["mouser_web"][0],
                                      command=lambda: self._cse_toggle("mouser_web"))
         self.mouser_btn.pack(side="left")
@@ -261,7 +264,7 @@ class App:
             self.status_var.set("Busy - please wait for the current task to finish.")
             return
         self._busy = True
-        for b in (self.search_btn, self.import_btn, self.lcsc_btn):
+        for b in (self.search_btn, self.import_btn, self.lcsc_btn, self.cse_direct_btn):
             b.state(["disabled"])
         self.status_var.set(label)
 
@@ -285,7 +288,7 @@ class App:
             return
         self._busy = False
         self._progress_text = ""
-        for b in (self.search_btn, self.import_btn, self.lcsc_btn):
+        for b in (self.search_btn, self.import_btn, self.lcsc_btn, self.cse_direct_btn):
             b.state(["!disabled"])
         if err is not None:
             self._auto_import_next = False
@@ -606,6 +609,103 @@ class App:
                                 "check the component.")
         self._auto_import_next = bool(self.settings.get("cse_auto_import", True))
         self._load_download(copy)
+
+    # ---- CSE direct: search by MPN -> download -> import (no browser) ----
+    def _cse_direct(self) -> None:
+        mpn = self._current_mpn()
+        if not mpn:
+            return
+        if check_library(self.dst_sch.get(), ".SchLib") or \
+                check_library(self.dst_pcb.get(), ".PcbLib"):
+            messagebox.showerror("Component Search Engine", "Select the destination SchLib and "
+                                 "PcbLib first - the part is imported into them.", parent=self.root)
+            return
+        email, password = self._cse_login
+        if not (email and password):
+            messagebox.showinfo("Component Search Engine", "Sign in with your free Component "
+                                "Search Engine account first (Settings > Component Search "
+                                "Engine).", parent=self.root)
+            self._cse_dialog()
+            return
+        self._run_bg(f"Searching Component Search Engine for {mpn}...",
+                     lambda: (mpn, CseClient(email, password).search(mpn)), self._cse_direct_found)
+
+    def _cse_direct_found(self, result) -> None:
+        mpn, parts = result
+        self._cse_update_login_label(verified=True)
+        exact = exact_matches(parts, mpn)
+        if not exact:
+            near = [f"{p.mpn} ({p.manufacturer})" for p in parts[:8]]
+            self._set_info(
+                [(f"Component Search Engine has no exact {mpn} with a symbol and footprint.\n",
+                  "warn")]
+                + ([("  Similar, NOT the same part: " + ", ".join(near) + "\n", "")] if near else [])
+                + [("  Try: From Mouser (ECAD model), Ultra Librarian / SnapMagic (Find a library "
+                    "buttons), EasyEDA by LCSC #, or the Celestial Altium Library (see README).\n",
+                    "")])
+            self.status_var.set(f"No exact CSE model for {mpn}.")
+            return
+        want_mfr = self.param_vars["Manufacturer"].get().strip().lower()
+        same_mfr = [p for p in exact if want_mfr and p.manufacturer.lower() == want_mfr]
+        if len(exact) == 1:
+            self._cse_direct_download(exact[0])
+        elif len(same_mfr) == 1:
+            self._cse_direct_download(same_mfr[0])
+        else:
+            self._cse_choose(exact)
+
+    def _cse_choose(self, parts) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Choose the part - Component Search Engine")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        ttk.Label(dlg, padding=8, text=f"{parts[0].mpn} exists under several manufacturers on "
+                  "Component Search Engine. Choose the right one:").pack(anchor="w")
+        cols = (("mfr", "Manufacturer", 160), ("desc", "Description", 330), ("pkg", "Package", 150),
+                ("3d", "3D", 40), ("conf", "Checked", 150))
+        tree = ttk.Treeview(dlg, columns=[c[0] for c in cols], show="headings", height=6,
+                            selectmode="browse")
+        for cid, head, w in cols:
+            tree.heading(cid, text=head)
+            tree.column(cid, width=w, stretch=cid == "desc")
+        for i, p in enumerate(parts):
+            tree.insert("", "end", iid=str(i), values=(p.manufacturer, p.description, p.package,
+                                                       "Yes" if p.has_3d else "-", p.confidence))
+        tree.pack(fill="both", expand=True, padx=8)
+        tree.selection_set("0")
+
+        def ok():
+            sel = tree.selection()
+            if sel:
+                dlg.destroy()
+                self._cse_direct_download(parts[int(sel[0])])
+        tree.bind("<Double-1>", lambda e: ok())
+        bb = ttk.Frame(dlg, padding=8)
+        bb.pack(fill="x")
+        ttk.Button(bb, text="Download and import", command=ok).pack(side="right")
+        ttk.Button(bb, text="Cancel", command=dlg.destroy).pack(side="right", padx=4)
+
+    def _cse_direct_download(self, part) -> None:
+        email, password = self._cse_login
+        for key, val in (("Manufacturer", part.manufacturer), ("Manufacturer Part Number", part.mpn),
+                         ("Description", part.description), ("Datasheet", part.datasheet)):
+            if val and not self.param_vars[key].get().strip():
+                self.param_vars[key].set(val)
+        out = self.work_dir / "downloads" / f"cse-{part.part_id}-{os.getpid()}-{id(part)}"
+        label = f"{part.mpn} ({part.manufacturer})"
+
+        def progress(done, total):
+            self._progress_text = (f"Downloading {label} from Component Search Engine: "
+                                   f"{human_size(done)}" + (f" of {human_size(total)}" if total
+                                                            else ""))
+
+        def done(path):
+            self._auto_import_next = True        # the user asked for this part: import it
+            self._load_download(path)
+
+        self._run_bg(f"Downloading {label} from Component Search Engine...",
+                     lambda: CseClient(email, password).download(part.part_id, out, progress),
+                     done)
 
     def _cse_fetch(self, epw) -> None:
         """Download the model for a CSE part file with the user's CSE login, then import."""

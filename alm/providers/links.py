@@ -37,6 +37,10 @@ MANUAL_SOURCES: list[ManualSource] = [
     ManualSource("mouser_web", "Mouser (web)", "https://www.mouser.com/c/?q={q}"),
     ManualSource("digikey_web", "DigiKey (web)",
                  "https://www.digikey.com/en/products/result?keywords={q}"),
+    # No MPN web search: parts are reached inside Altium through its free database library
+    # (portal account + DbLib). Opens the setup guide.
+    ManualSource("celestial", "Celestial Library", "https://altiumlibrary.com/GetStarted",
+                 "Free Altium database library (~250k parts, 3D); used inside Altium."),
 ]
 
 ALTIUM_MPS_HELP = (

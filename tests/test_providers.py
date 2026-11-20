@@ -73,6 +73,9 @@ class LinkTests(unittest.TestCase):
     def test_all_templates_https(self):
         for s in MANUAL_SOURCES:
             self.assertTrue(s.url("A B").startswith("https://"), s.key)
+            if s.key == "celestial":          # no MPN web search: opens the setup guide
+                self.assertNotIn("{q}", s.url_template)
+                continue
             self.assertIn("A%20B", s.url("A B"))
 
 

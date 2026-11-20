@@ -10,6 +10,21 @@ The user chose a **manual download + automatic import** workflow. Automatic down
 
 ---
 
+## 2026-11-20 — v1.1.0: "Get from CSE (direct)" ✅ verified live
+
+- **Get from CSE (direct)** (step 3, first button): MPN → CSE search (`ad.componentsearchengine.com/ga/search.php?kws=<MPN>&v=1`, Basic auth, the method from the user's own `downloader.py`) → **exact** MPN matches that have a model → download (`model.php`) with progress → automatic import with backup, duplicate handling, verification and 3D attach.
+  - Several manufacturers: the app uses the Manufacturer field if it identifies one part, otherwise shows a chooser (manufacturer, description, package, 3D, CSE "confidence").
+  - No match: Messages lists similar but NOT identical parts and suggests the other sources.
+- The login comes only from the app's encrypted store (Settings → Component Search Engine). **No credentials in code.** The user's separate `downloader.py` (outside this repo) still contains them; it must not be published.
+- **Celestial Altium Library:** researched. It has about 257k parts with 3D models, and its custom licence allows commercial use but not reselling the models. Access is only through Altium's database library: a per-user portal login, a cloud SQL server, and Microsoft SQL drivers. There is no MPN web lookup, so it can't be fetched automatically. Added a "Celestial Library" button (setup guide) and a README section as the fallback.
+- **Verified live with the user's account** (login read from the encrypted store):
+  - Search: 50YXJ22MTA5X11 → 1 exact; STM32F103C8T6 → 2 exact (STMicroelectronics and a "Microchip" listing); MCP23017T-E/ML → 1 exact.
+  - Direct download of 50YXJ22MTA5X11: 1.6 MB, with Altium SchLib/PcbLib and STEP.
+  - **Full GUI run:** STM32F103C8T6 with Manufacturer=STMicroelectronics was picked automatically, downloaded, and imported into a temporary library. The symbol is linked to `QFP50P900X900X160-48N` and the footprint has its 3D body (checked from disk).
+- 69 offline tests pass.
+
+---
+
 ## 2026-11-19 — v1.0.0: one-file Windows app ✅
 
 - **`AltiumLibraryManager.exe`** (about 12 MB, PyInstaller one-file, windowed) includes Python, Tk and the Altium scripts. No installation is needed. It is published on the GitHub Releases page. Rebuild with `python tools/build_exe.py`.

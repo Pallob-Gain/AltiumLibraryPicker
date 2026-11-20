@@ -1,4 +1,5 @@
 import base64
+import json
 import io
 import tempfile
 import unittest
@@ -65,6 +66,55 @@ class EpwTests(unittest.TestCase):
                          "evil.zip")
         self.assertEqual(cc.safe_filename('attachment; filename="x.exe"', 7), "LIB_7.zip")
         self.assertEqual(cc.safe_filename("", 7), "LIB_7.zip")
+
+
+SEARCH = {"PartCount": 4, "Status": "OK", "Message": "", "Parts": {
+    "12891002": {"PartNumber": "STM32F103C8T6", "Manufacturer": "STMicroelectronics",
+                 "ModelAvailable": "1", "Have3D": "1", "Symbol": "https://g/symbol.php?partID=1",
+                 "Footprint": "https://g/footprint.php?partID=1", "PartID": "12891002",
+                 "Confidence": "C3", "PackageCategory": "QFP", "PinCount": "48"},
+    "13252305": {"PartNumber": "STM32F103C8T6XXX", "Manufacturer": "STMicroelectronics",
+                 "ModelAvailable": "1", "Symbol": "s", "Footprint": "f", "PartID": "13252305"},
+    "pid555": {"PartNumber": "stm32f103c8t6 ", "Manufacturer": "Other",
+               "ModelAvailable": "1", "Symbol": "s", "Footprint": "f"},
+    "777": {"PartNumber": "STM32F103C8T6", "Manufacturer": "NoModel",
+            "ModelAvailable": "0", "Symbol": None, "Footprint": None, "PartID": "777"}}}
+
+
+class SearchTests(unittest.TestCase):
+    def test_parse_and_exact(self):
+        parts = cc.parse_search(SEARCH)
+        self.assertEqual(len(parts), 4)
+        exact = cc.exact_matches(parts, "STM32F103C8T6")
+        self.assertEqual(sorted(p.part_id for p in exact), [555, 12891002])   # 'pid' prefix ok
+        st = next(p for p in exact if p.part_id == 12891002)
+        self.assertTrue(st.has_3d and st.model_available)
+        self.assertEqual((st.package, st.pins), ("QFP", "48"))
+
+    def test_suffix_variant_and_no_model_excluded(self):
+        names = [p.mpn for p in cc.exact_matches(cc.parse_search(SEARCH), "STM32F103C8T6")]
+        self.assertNotIn("STM32F103C8T6XXX", names)
+        self.assertEqual(len([p for p in cc.parse_search(SEARCH) if p.manufacturer == "NoModel"
+                              and p.model_available]), 0)
+
+    def test_empty_and_bad_shapes(self):
+        self.assertEqual(cc.parse_search({"PartCount": 0, "Parts": None}), [])
+        with self.assertRaises(cc.CseError):
+            cc.parse_search(["not", "a", "dict"])
+
+    def test_search_request(self):
+        seen = {}
+        client = cc.CseClient("me@example.com", "pw")
+
+        def fake_open(req, timeout):
+            seen["url"], seen["auth"] = req.full_url, req.get_header("Authorization")
+            return FakeResp(json.dumps(SEARCH).encode(), {"Content-Type": "application/json"})
+        with mock.patch.object(cc._opener, "open", side_effect=fake_open):
+            parts = client.search(" STM32F103C8T6 ")
+        self.assertEqual(seen["url"], "https://ad.componentsearchengine.com/ga/search.php?"
+                                      "kws=STM32F103C8T6&v=1")
+        self.assertTrue(seen["auth"].startswith("Basic "))
+        self.assertEqual(len(parts), 4)
 
 
 class ClientTests(unittest.TestCase):
