@@ -2,6 +2,17 @@
 
 # Altium Library Manager
 
+> **Rust migration in progress:** The GTK4 interface supports LCSC search and
+> manual library-site links, selecting SchLib/PcbLib files or ZIP packages, and
+> listing and selecting schematic components. CSE and SnapEDA direct downloads,
+> EasyEDA conversion and staging, download watching, and IntLib extraction have
+> been ported but not verified live.
+> CSE and SnapEDA credentials are entered for each download and are not saved. The watcher
+> loads a completed library for review rather than importing automatically;
+> `.epw` downloads are not supported yet. Import has backups but has **not yet
+> been verified end-to-end with Altium**; test only with copies.
+> The workflow below describes the earlier Python version.
+
 **Put any electronic part into your own Altium library in a few clicks:** symbol, footprint and 3D model, linked together and ready to place.
 
 You type the part number (for example `RP2040` or `NE555DR`), click one button, and the app does the rest:
@@ -58,7 +69,7 @@ In section **3. Import into Altium**, click **Select…** next to **Destination 
 3. Type your email and password, tick **Remember login**, and click **Sign in & test**. It should say "Signed in".
 
 **Step C (optional): add your other logins.**
-- **SnapEDA:** create a free account at [snapeda.com](https://www.snapeda.com/), then go to **Settings → SnapEDA…**, enter your login, tick **Remember login** and click **Sign in & test**.
+- **SnapEDA (Rust version):** create a free account at [snapeda.com](https://www.snapeda.com/). Enter the username and password when using the direct-download button; they are not saved.
 - **Ultra Librarian:** create a free account at [ultralibrarian.com](https://www.ultralibrarian.com/), then go to **Settings → Ultra Librarian…**, enter your login (or click **Use my SnapEDA login** if it is the same) and click **Save**. The app uses it to copy your email and password into Ultra Librarian's sign-in page with one click.
 You don't need any key for **Search**: it uses LCSC's parts catalogue, which needs no account.
 
@@ -85,10 +96,10 @@ All of these use the part number from **1. Part number**. Try them from top to b
 | Button | What you get | Login | How automatic |
 |---|---|---|---|
 | **Get from CSE (direct)** | Symbol, footprint, **3D** (placed correctly) | Component Search Engine | Fully automatic. **Start here.** |
-| **Get from SnapEDA (direct)** | Symbol, footprint (**no 3D**) | SnapEDA | Fully automatic |
+| **Get from SnapEDA (direct)** | Symbol, footprint (typically **no 3D**) | SnapEDA | Downloads and selects a source for review |
 | **From Ultra Librarian…** | Symbol, footprint, **3D** | Ultra Librarian (in your browser) | You click the download in your browser; the app imports it |
 | **Look for download** | Whatever the file contains | None | Uses a library file you downloaded yourself, from any website |
-| **EasyEDA by LCSC # → Fetch** | Symbol, footprint, 3D (community-made) | None | Automatic; then click **Import into Altium** |
+| **EasyEDA by LCSC # → Fetch** | Symbol, footprint, 3D (community-made) | None | Builds staging libraries; then click **Import into Altium** |
 | **Select file… / Select folder…** | Whatever the file contains | None | You pick the file; then click **Import into Altium** |
 
 ### Get from CSE (direct)
@@ -97,7 +108,7 @@ The app searches Component Search Engine for the **exact** part number, download
 Only exact matches are used: `MCP23017-E/ML` and `MCP23017T-E/ML` are different parts. If there's no exact match, Messages lists the similar part numbers it found.
 
 ### Get from SnapEDA (direct)
-This works the same way, using SnapEDA. SnapEDA's Altium download has **no 3D model**, so use CSE or Ultra Librarian when you need 3D. If SnapEDA says "too many requests", wait about 10 minutes; SnapEDA limits how often you can sign in.
+Enter your SnapEDA credentials when prompted. The Rust version downloads and selects the source libraries; review them before clicking **Import into Altium**. This workflow has not been verified against the live service. SnapEDA's Altium downloads typically have **no 3D model**. If SnapEDA says "too many requests", wait about 10 minutes; SnapEDA limits how often you can sign in.
 
 ### From Ultra Librarian…
 1. Click **From Ultra Librarian…**. Ultra Librarian opens in your browser with your part number already searched.
@@ -117,7 +128,7 @@ The **Find a library** buttons on the right open each website's search for your 
 ### EasyEDA by LCSC #
 For parts sold by LCSC and JLCPCB. When you **Search**, the app looks up the part's LCSC number (for example `C2040`) and fills it in for you. Click **Fetch**: the app downloads the EasyEDA data and builds the part in Altium. Then click **Import into Altium**. You can also type an LCSC number yourself.
 
-*EasyEDA data is made by the community, so always check the pinout and footprint against the datasheet.*
+The Rust converter is checked against the original offline fixtures, but fetching and building have not been verified live. The app builds new staging libraries and rejects a pad-count mismatch before selecting them. EasyEDA uses an undocumented API and community-made data; review converter warnings and always check the pinout, footprint, and 3D model against the datasheet.
 
 ### Not found anywhere? The Celestial Altium Library
 The free [Celestial Altium Library](https://altiumlibrary.com/GetStarted) has about 250,000 parts with 3D models. It works **inside Altium** as a database library, so this app can't search it. Click the **Celestial Library** button for the setup guide: you create a free account, install their DbLib in Altium, and place parts from Altium's Components panel. Its licence allows commercial use in your designs, but not selling the symbols or footprints themselves.
@@ -148,7 +159,7 @@ You can also just delete the new symbol and footprint in Altium.
 | Problem | What to do |
 |---|---|
 | "Windows protected your PC" | Click **More info → Run anyway** (see [Download and start](#2-download-and-start)). |
-| Antivirus warns about the .exe | One-file Python apps sometimes trigger false alarms. The full source code is here to check, or [run from source](#run-from-source-for-developers) instead. |
+| Antivirus warns about the .exe | Native Rust builds do not require a Python runtime. The full source code is here to check, or [run from source](#run-from-source-for-developers) instead. |
 | "No answer from Altium" | Make sure Altium is running and no dialog box is open in Altium, then try again. |
 | "A destination library is open in Altium with unsaved changes" | Save or close that library in Altium, then import again. |
 | Altium says "footprint not found" when placing the part | Your destination PcbLib must be part of your open project or installed in Altium. Or choose **Footprint link: Full library path** before importing. If Messages says "library search does not find footprint", restart Altium once. |
@@ -165,7 +176,7 @@ You can also just delete the new symbol and footprint in Altium.
 
 **Does it change my existing parts?** No. It only adds new parts. It never replaces or deletes anything, and it backs up first.
 
-**Do I need to install Python?** No. The `.exe` contains everything.
+**Do I need to install Python?** No. The Rust executable is native and does not use a Python runtime.
 
 **Is it really free?** Yes, MIT licence, including commercial use. The library websites are free to use with a free account; their parts are subject to their own terms.
 
@@ -175,17 +186,17 @@ You can also just delete the new symbol and footprint in Altium.
 
 ## Run from source (for developers)
 
-- **Requirements:** Windows, plus Python 3.10 or newer from [python.org](https://www.python.org/downloads/). No `pip install` is needed to run the app.
-- **Start:** double-click `Altium Library Manager.bat`, or run `python -m alm`.
-- **Tests:** `python -m unittest discover -s tests -v`. These run offline and don't need Altium.
-- **Build the .exe:** `pip install pyinstaller pillow`, then `python tools/build_exe.py`. The result is `dist/AltiumLibraryManager.exe`. `tools/make_icon.py` draws the icon.
+- **Requirements:** Windows 10/11, Rust/Cargo, and GTK4 runtime/development libraries.
+- **Start:** `cargo run`.
+- **Tests:** `cargo test`.
+- **Build:** `cargo build --release`. The native executable is in `target/release/altium-library-manager.exe`.
 - **Design notes:** see `architecture.md`, `progress.md`, `requirement.md` and `roadmap.md`. The Altium-side code is DelphiScript in `alm/altium/*.pas`; test changes on temporary libraries.
 
 Contributions are welcome: fork the project, make your change, run the tests, and open a pull request.
 
 ## Credits and licence
 
-- The EasyEDA converter (`alm/easyeda/convert.py`) and part builder (`alm/altium/ee_build.pas`) come from [EasyEDA-Importer](https://github.com/hiteshwar/EasyEDA-Importer), by the same author.
+- The Rust EasyEDA converter (`src/easyeda/convert.rs`) ports the original converter, and the part builder (`alm/altium/ee_build.pas`) comes from [EasyEDA-Importer](https://github.com/hiteshwar/EasyEDA-Importer), used with the owner's permission.
 - The SnapEDA download method was learned from [datasheet-cli](https://github.com/akiselev/datasheet-cli) (GPL-3.0). No code was copied; `alm/snapeda_client.py` is an original implementation.
 - Search and the LCSC number lookup use the LCSC/JLCPCB public parts catalogue, with LCSC's permission.
 - Licensed under [MIT](LICENSE): free to use, copy, modify and share, including commercially, as long as you keep the licence notice. **No warranty.** Always check footprints and pinouts against the datasheet before ordering PCBs.

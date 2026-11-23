@@ -1,0 +1,52 @@
+window {
+  font-size: 12px;
+}
+.section-title {
+  font-weight: bold;
+  font-size: 1.05em;
+}
+.subheading {
+  font-weight: bold;
+}
+.card {
+  padding: 7px;
+  border: 1px solid alpha(currentColor, 0.18);
+  border-radius: 6px;
+}
+.card button {
+  min-height: 20px;
+  padding: 1px 7px;
+}
+.card entry {
+  min-height: 20px;
+  padding: 1px 5px;
+}
+.card entry.compact-entry {
+  min-width: 0;
+}
+.card flowbox > flowboxchild {
+  padding: 0;
+}
+.message-box {
+  border: 1px solid alpha(currentColor, 0.18);
+  border-radius: 6px;
+}
+.muted {
+  opacity: 0.7;
+}
+.notice {
+  color: #a45b00;
+}
+.exact-row {
+  background-color: alpha(#3a9d5d, 0.13);
+}
+.similar-row {
+  background-color: alpha(#d99924, 0.13);
+}
+.result-cell {
+  padding: 3px 6px;
+}
+columnview row, columnview cell {
+  min-height: 0;
+  padding: 0;
+}

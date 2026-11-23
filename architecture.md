@@ -1,6 +1,10 @@
 # Altium Library Manager — Architecture and Integration Decisions
 
-Status: v1.0 (2026-11-18). This document changes only when a decision is overturned by evidence, and each such change is logged in §8.
+Status: historical architecture and decision log. The Rust migration is incomplete; see
+the current status in [README.md](README.md). The Rust import bridge has mocked
+tests but has not yet been verified end-to-end with Altium. Sections below also
+describe the earlier Python implementation and planned features, not necessarily
+the current Rust behavior.
 
 Verification legend:
 - ✅ **Verified**: confirmed from official documentation.
@@ -14,7 +18,7 @@ Verification legend:
 ```
 ┌─────────────────────────── Windows PC ───────────────────────────────┐
 │                                                                       │
-│  Python 3.12 desktop app (Tkinter, standard library only)             │
+│  Rust desktop app (GTK4 XML interface)                                │
 │   ├─ providers/   API providers (Mouser, Nexar, DigiKey…)              │
 │   │               + manual-assist link providers (all others)          │
 │   ├─ ranking      exact-match logic, recommendation                    │
@@ -33,9 +37,9 @@ Verification legend:
 
 | Decision | Choice | Why |
 |---|---|---|
-| Language | Python 3.12 (python.org build) | Mature standard library (HTTP, JSON, SQLite, zipfile, Tkinter), easy to maintain without AI assistance. |
-| UI | **Tkinter/ttk** | Ships with Python, so there is nothing extra to install. A results table and a few buttons is all the UI needs. PySide6 (~200 MB, LGPL) offers nicer widgets but adds a heavy dependency for no functional gain. A localhost web UI adds a server, a browser and two languages. |
-| Runtime dependencies | **None** beyond the Python standard library | Stays usable long-term and needs no `pip` maintenance. Tests use `unittest`. |
+| Language | Rust 2021 edition | Native Windows executable, strong type safety and no Python runtime. |
+| UI | **GTK4** | The interface is defined in `resources/app.ui` and loaded through GtkBuilder. |
+| Runtime dependencies | Reqwest, rusqlite, serde, GTK4 | Each dependency is used for HTTP, local storage, serialization or the desktop UI. |
 | Altium modification | DelphiScript running **inside Altium**, driven by a JSON job file | Altium's supported way to edit libraries is its scripting API (SchServer/PCBServer). Python never writes `.SchLib`/`.PcbLib` binaries itself (F5-3). |
 | Altium extension (C# SDK) | Rejected for now | Needs the Altium SDK, a build pipeline and per-version redeployment, which is too heavy for one user. EasyEDALoader shows it can be done, but it is GPL-3.0. |
 | Data store | SQLite file + JSON settings in `%APPDATA%\AltiumLibraryManager\` | Part of the standard library, kept outside the source tree. |

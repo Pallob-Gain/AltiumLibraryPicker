@@ -356,3 +356,11 @@ Double-click `Altium Library Manager.bat`. See `README.md`.
 - (Superseded 2026-11-19: the import now refuses if a destination library has unsaved edits.)
 - Library vendors format symbols differently. Only Ultra Librarian has been tested; SamacSys, SnapMagic and EasyEDA exports may show new cases. The copy-count verification will stop the import rather than save a broken part.
 - Backups accumulate in `%APPDATA%\AltiumLibraryManager\backups\` and are never deleted automatically.
+## Rust migration (2026-11-23)
+
+- Converted the application implementation from Python to a Rust workspace.
+- Added a GTK4 desktop UI whose widgets are defined in `resources/app.ui`.
+- Migrated MPN normalization/ranking, LCSC search, JSON settings, SQLite storage, Windows DPAPI credentials, and the Altium job-file bridge to Rust.
+- Preserved the existing Altium `.pas` scripts for in-Altium library operations.
+- `cargo test` passes; `cargo run` starts the GTK4 application.
+

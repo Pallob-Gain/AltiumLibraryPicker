@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <object class="GtkApplicationWindow" id="main_window">
+    <property name="title">Altium Library Manager</property>
+    <property name="default-width">1180</property>
+    <property name="default-height">850</property>
+    <child>
+      <object class="GtkBox">
+        <property name="orientation">vertical</property>
+        <child>
+          <object class="GtkScrolledWindow">
+            <property name="vexpand">true</property>
+            <property name="hscrollbar-policy">never</property>
+            <child>
+              <object class="GtkBox">
+                <property name="orientation">vertical</property>
+                <property name="spacing">8</property>
+                <property name="margin-start">12</property>
+                <property name="margin-end">12</property>
+                <property name="margin-top">10</property>
+                <property name="margin-bottom">10</property>
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property><property name="spacing">6</property>
+                    <child><object class="GtkLabel"><property name="label">1. Part number</property><property name="xalign">0</property><style><class name="section-title"/></style></object></child>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="spacing">8</property><style><class name="card"/></style>
+                        <child><object class="GtkEntry" id="mpn_entry"><property name="width-chars">28</property><property name="placeholder-text">Enter manufacturer part number</property><property name="activates-default">false</property></object></child>
+                        <child><object class="GtkButton" id="search_button"><property name="label">Search</property><style><class name="suggested-action"/></style></object></child>
+                        <child><object class="GtkLabel" id="search_info"><property name="label">Search LCSC or open a library site below</property><property name="xalign">0</property><property name="hexpand">true</property><property name="ellipsize">end</property><style><class name="muted"/></style></object></child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkBox">
+                    <property name="spacing">12</property>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property><property name="spacing">6</property><property name="hexpand">true</property>
+                        <child><object class="GtkLabel"><property name="label">2. Search results</property><property name="xalign">0</property><style><class name="section-title"/></style></object></child>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">vertical</property><property name="spacing">6</property><style><class name="card"/></style>
+                            <child>
+                              <object class="GtkScrolledWindow">
+                                <property name="min-content-height">165</property><property name="max-content-height">220</property><property name="propagate-natural-height">true</property>
+                                <property name="hscrollbar-policy">automatic</property>
+                                <child><object class="GtkColumnView" id="results_view"><property name="show-row-separators">true</property><property name="show-column-separators">true</property></object></child>
+                              </object>
+                            </child>
+                            <child><object class="GtkBox"><property name="spacing">6</property>
+                              <child><object class="GtkButton" id="source_button"><property name="label">Open source page</property><property name="sensitive">false</property></object></child>
+                              <child><object class="GtkButton" id="datasheet_button"><property name="label">Open datasheet</property><property name="sensitive">false</property></object></child>
+                              <child><object class="GtkLabel"><property name="label">Select a row to view its details</property><property name="xalign">0</property><property name="hexpand">true</property><style><class name="muted"/></style></object></child>
+                            </object></child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property><property name="spacing">6</property>
+                        <child><object class="GtkLabel"><property name="label">Find a library</property><property name="xalign">0</property><style><class name="section-title"/></style></object></child>
+                        <child>
+                          <object class="GtkGrid" id="sites_grid">
+                            <property name="column-spacing">5</property><property name="row-spacing">5</property><property name="column-homogeneous">true</property>
+                            <style><class name="card"/></style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property><property name="spacing">6</property>
+                    <child><object class="GtkLabel"><property name="label">3. Import into Altium</property><property name="xalign">0</property><style><class name="section-title"/></style></object></child>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property><property name="spacing">6</property><style><class name="card"/></style>
+                        <child><object class="GtkLabel"><property name="label">Direct downloads, EasyEDA staging, and Altium imports have not been verified live. Test imports on copies of your libraries first.</property><property name="xalign">0</property><property name="wrap">true</property><style><class name="notice"/></style></object></child>
+                        <child>
+                          <object class="GtkFlowBox">
+                            <property name="selection-mode">none</property><property name="min-children-per-line">1</property><property name="max-children-per-line">10</property><property name="row-spacing">4</property><property name="column-spacing">4</property>
+                            <child><object class="GtkLabel"><property name="label">Get the part:</property><property name="xalign">0</property></object></child>
+                            <child><object class="GtkButton" id="cse_button"><property name="label">Get from CSE (direct)</property></object></child>
+                            <child><object class="GtkButton" id="snapeda_button"><property name="label">Get from SnapEDA (direct)</property></object></child>
+                            <child><object class="GtkButton" id="ul_browser_button"><property name="label">Ultra Librarian (browser)...</property></object></child>
+                            <child><object class="GtkButton" id="watch_button"><property name="label">Look for download</property></object></child>
+                            <child><object class="GtkLabel"><property name="label">EasyEDA by LCSC #:</property></object></child>
+                            <child><object class="GtkEntry" id="easyeda_entry"><property name="width-chars">9</property><property name="max-width-chars">9</property><style><class name="compact-entry"/></style></object></child>
+                            <child><object class="GtkButton" id="easyeda_button"><property name="label">Fetch</property></object></child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="spacing">6</property>
+                            <child><object class="GtkLabel"><property name="label">Or a file:</property></object></child>
+                            <child><object class="GtkButton" id="pick_source_button"><property name="label">Select file (zip, IntLib, SchLib, PcbLib, LibPkg)...</property></object></child>
+                            <child><object class="GtkButton" id="pick_folder_button"><property name="label">Select folder...</property></object></child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkGrid">
+                            <property name="column-spacing">8</property><property name="row-spacing">3</property>
+                            <child><object class="GtkLabel"><property name="label">Source SchLib:</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">0</property></layout></object></child>
+                            <child><object class="GtkEntry" id="source_schlib_entry"><property name="hexpand">true</property><property name="editable">false</property><layout><property name="column">1</property><property name="row">0</property></layout></object></child>
+                            <child><object class="GtkButton" id="source_schlib_button"><property name="label">Select...</property><layout><property name="column">2</property><property name="row">0</property></layout></object></child>
+                            <child><object class="GtkLabel"><property name="label">Source PcbLib:</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">1</property></layout></object></child>
+                            <child><object class="GtkEntry" id="source_pcblib_entry"><property name="hexpand">true</property><property name="editable">false</property><layout><property name="column">1</property><property name="row">1</property></layout></object></child>
+                            <child><object class="GtkButton" id="source_pcblib_button"><property name="label">Select...</property><layout><property name="column">2</property><property name="row">1</property></layout></object></child>
+                            <child><object class="GtkLabel"><property name="label">Component to import:</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">2</property></layout></object></child>
+                            <child><object class="GtkDropDown" id="component_selector"><property name="hexpand">true</property><property name="sensitive">false</property><layout><property name="column">1</property><property name="row">2</property></layout></object></child>
+                            <child><object class="GtkLabel"><property name="label">Destination SchLib:</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">3</property></layout></object></child>
+                            <child><object class="GtkEntry" id="schlib_entry"><property name="hexpand">true</property><property name="editable">false</property><layout><property name="column">1</property><property name="row">3</property></layout></object></child>
+                            <child><object class="GtkButton" id="schlib_button"><property name="label">Select...</property><layout><property name="column">2</property><property name="row">3</property></layout></object></child>
+                            <child><object class="GtkLabel"><property name="label">Destination PcbLib:</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">4</property></layout></object></child>
+                            <child><object class="GtkEntry" id="pcblib_entry"><property name="hexpand">true</property><property name="editable">false</property><layout><property name="column">1</property><property name="row">4</property></layout></object></child>
+                            <child><object class="GtkButton" id="pcblib_button"><property name="label">Select...</property><layout><property name="column">2</property><property name="row">4</property></layout></object></child>
+                          </object>
+                        </child>
+                        <child><object class="GtkLabel"><property name="label">Component parameters</property><property name="xalign">0</property><style><class name="subheading"/></style></object></child>
+                        <child>
+                          <object class="GtkGrid">
+                            <property name="column-spacing">8</property><property name="row-spacing">3</property>
+                            <child><object class="GtkLabel"><property name="label">Manufacturer:</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">0</property></layout></object></child>
+                            <child><object class="GtkEntry" id="manufacturer_entry"><property name="hexpand">true</property><layout><property name="column">1</property><property name="row">0</property></layout></object></child>
+                            <child><object class="GtkLabel"><property name="label">Manufacturer Part Number:</property><property name="xalign">0</property><layout><property name="column">2</property><property name="row">0</property></layout></object></child>
+                            <child><object class="GtkEntry" id="part_number_entry"><property name="hexpand">true</property><layout><property name="column">3</property><property name="row">0</property></layout></object></child>
+                            <child><object class="GtkLabel"><property name="label">Description:</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">1</property></layout></object></child>
+                            <child><object class="GtkEntry" id="description_entry"><property name="hexpand">true</property><layout><property name="column">1</property><property name="row">1</property></layout></object></child>
+                            <child><object class="GtkLabel"><property name="label">Datasheet:</property><property name="xalign">0</property><layout><property name="column">2</property><property name="row">1</property></layout></object></child>
+                            <child><object class="GtkEntry" id="datasheet_entry"><property name="hexpand">true</property><layout><property name="column">3</property><property name="row">1</property></layout></object></child>
+                            <child><object class="GtkLabel"><property name="label">LCSC Part #:</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">2</property></layout></object></child>
+                            <child><object class="GtkEntry" id="lcsc_entry"><property name="hexpand">true</property><layout><property name="column">1</property><property name="row">2</property></layout></object></child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkFlowBox">
+                            <property name="selection-mode">none</property><property name="min-children-per-line">1</property><property name="max-children-per-line">8</property><property name="row-spacing">4</property><property name="column-spacing">6</property>
+                            <child><object class="GtkLabel"><property name="label">If the name already exists:</property></object></child>
+                            <child><object class="GtkCheckButton" id="conflict_skip"><property name="label">Skip (never overwrite)</property><property name="active">true</property></object></child>
+                            <child><object class="GtkCheckButton" id="conflict_rename"><property name="label">Import with new name (_1)</property><property name="group">conflict_skip</property></object></child>
+                            <child><object class="GtkLabel"><property name="label">Footprint link:</property></object></child>
+                            <child><object class="GtkDropDown" id="link_mode"><property name="model"><object class="GtkStringList"><items><item>Library file name (recommended)</item><item>Full library path</item><item>Any library</item></items></object></property></object></child>
+                            <child><object class="GtkButton" id="import_button"><property name="label">Import into Altium</property><style><class name="suggested-action"/></style></object></child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property><property name="spacing">6</property>
+                    <child><object class="GtkLabel"><property name="label">Messages</property><property name="xalign">0</property><style><class name="section-title"/></style></object></child>
+                    <child>
+                      <object class="GtkScrolledWindow">
+                        <property name="min-content-height">100</property><property name="vexpand">true</property>
+                        <style><class name="message-box"/></style>
+                        <child><object class="GtkTextView" id="messages"><property name="editable">false</property><property name="cursor-visible">false</property><property name="wrap-mode">word-char</property><property name="left-margin">10</property><property name="right-margin">10</property><property name="top-margin">8</property><property name="bottom-margin">8</property></object></child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child><object class="GtkLabel" id="status_label"><property name="label">Ready.</property><property name="xalign">0</property><property name="margin-start">16</property><property name="margin-end">16</property><property name="margin-top">5</property><property name="margin-bottom">7</property><style><class name="muted"/></style></object></child>
+      </object>
+    </child>
+  </object>
+</interface>

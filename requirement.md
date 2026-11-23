@@ -135,7 +135,7 @@ Minimise the time between knowing a component's Manufacturer Part Number (MPN) a
 | ID | Requirement |
 |---|---|
 | F10-1 | The application SHALL have a simple Windows desktop UI. Top: MPN field and Search button. Middle: results (source, symbol, footprint, 3D, recommendation). Bottom: Download, Select SchLib, Select PcbLib, Import, and status/validation messages. |
-| F10-2 | The technology SHALL be lightweight and maintainable. Python + PySide6, a localhost web UI, and an Altium-side DelphiScript bridge were evaluated; see `architecture.md`. |
+| F10-2 | The technology SHALL be lightweight and maintainable. Rust + GTK4 for the XML-defined desktop UI and an Altium-side DelphiScript bridge are used; see `architecture.md`. |
 | F10-3 | There SHALL be no unnecessary styling or animation. |
 
 ## 12. Feature 11 — Local component database
