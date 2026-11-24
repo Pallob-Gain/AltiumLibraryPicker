@@ -22,7 +22,7 @@ You type the part number (for example `RP2040` or `NE555DR`), click one button, 
 - it fills in Manufacturer, Part Number, Datasheet and LCSC number;
 - it backs up your libraries first and never overwrites a part you already have.
 
-It is free and open source (MIT licence). There is nothing to install: it is one `.exe` file. It works with **Altium Designer on Windows 10 and 11**.
+It is free and open source (MIT licence). It works with **Altium Designer on Windows 10 and 11**. The single-file Rust package contains the GTK runtime.
 
 ![Main window](docs/screenshot.png)
 
@@ -48,6 +48,13 @@ It is free and open source (MIT licence). There is nothing to install: it is one
 - A free account on **Component Search Engine**, the recommended source for symbol, footprint and 3D. Accounts on SnapEDA and Ultra Librarian are optional extras.
 
 ## 2. Download and start
+
+The steps below describe the earlier Python release. For the Rust version, build
+the single-file package described under [Run from source](#run-from-source-for-developers)
+and run `AltiumLibraryManager.exe`. It extracts its runtime to a temporary
+directory on startup and normally removes it when the application closes. An
+interrupted process may leave a temporary `altium-library-manager-*` directory.
+The executable produced directly by `cargo build` is not the single-file package.
 
 1. Open the **[Releases page](https://github.com/Shihabul-glitch/Altium_Library_Mangement/releases/latest)** and download **`AltiumLibraryManager.exe`**.
 2. Put it anywhere you like, for example on your Desktop, and **double-click it**.
@@ -158,6 +165,8 @@ You can also just delete the new symbol and footprint in Altium.
 
 | Problem | What to do |
 |---|---|
+| Rust executable reports `gio-2.0-0.dll` or another GTK DLL is missing | Use the single-file Rust package, not the executable produced directly by `cargo build`. If using the folder bundle instead, keep all extracted files together. |
+| Unpackaged Rust executable reports `VCRUNTIME140.dll` is missing | Use the single-file Rust package, or install the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) matching the build architecture. |
 | "Windows protected your PC" | Click **More info → Run anyway** (see [Download and start](#2-download-and-start)). |
 | Antivirus warns about the .exe | Native Rust builds do not require a Python runtime. The full source code is here to check, or [run from source](#run-from-source-for-developers) instead. |
 | "No answer from Altium" | Make sure Altium is running and no dialog box is open in Altium, then try again. |
@@ -170,7 +179,7 @@ You can also just delete the new symbol and footprint in Altium.
 | Search finds nothing, or says LCSC is not reachable | Check your internet connection. LCSC doesn't sell every part: if there's no exact match, you can still use the download buttons in step 3. They work with the part number alone. |
 | The LCSC Part # stays empty | LCSC doesn't sell that exact part number, or lists it under another manufacturer. You can type the number yourself. |
 
-**Your data** (settings, encrypted logins, backups, and the log file `alm.log`) lives in `%APPDATA%\AltiumLibraryManager\`. Open it with **Settings → Open data folder**. **To uninstall,** delete the `.exe` and that folder.
+**Your data** (settings, encrypted logins, backups, and the log file `alm.log`) lives in `%APPDATA%\AltiumLibraryManager\`. Open it with **Settings → Open data folder**. **To uninstall,** delete the app and that data folder.
 
 ## 9. Questions
 
@@ -189,7 +198,10 @@ You can also just delete the new symbol and footprint in Altium.
 - **Requirements:** Windows 10/11, Rust/Cargo, and GTK4 runtime/development libraries.
 - **Start:** `cargo run`.
 - **Tests:** `cargo test`.
-- **Build:** `cargo build --release`. The native executable is in `target/release/altium-library-manager.exe`.
+- **Build:** `cargo build --release`. The native executable is in `target/release/altium-library-manager.exe` and opens without a console window on Windows.
+- **Package the Windows Rust build as one x64 executable:** First run `cargo build --release` using the MSVC Rust toolchain and gvsbuild GTK. Then run `powershell -ExecutionPolicy Bypass -File tools\package-single-exe.ps1`. The script uses `C:\gtk` by default (override with `-GtkRoot`) and discovers the Visual Studio x64 C++ redistributable (or specify its `Microsoft.VC143.CRT` directory with `-VcRuntimeDir`). Pass `-AppExe` if the build is in a different location. It creates `dist\AltiumLibraryManager.exe` and refuses to overwrite an existing file. GTK, its data and license files, and the C++ runtime DLLs are embedded. This script expects a matching x64 gvsbuild layout and rejects binaries linked with a newer MSVC toolset than the redistributable.
+- **Inspect or replace bundled libraries:** Run `Start-Process -Wait .\AltiumLibraryManager.exe -ArgumentList '--extract-runtime', 'C:\alm-runtime'` to extract the package to a new directory. The directory must not already exist. Third-party notices are in its `share\doc` and `share\licenses` directories; the extracted application can also be run directly with compatible replacement DLLs.
+- **Optional folder bundle:** `powershell -ExecutionPolicy Bypass -File tools\package-windows.ps1` creates `dist\altium-library-manager` with the GTK runtime. The folder bundle does not include the C++ redistributable; distribute its entire contents and install the redistributable separately if needed.
 - **Design notes:** see `architecture.md`, `progress.md`, `requirement.md` and `roadmap.md`. The Altium-side code is DelphiScript in `alm/altium/*.pas`; test changes on temporary libraries.
 
 Contributions are welcome: fork the project, make your change, run the tests, and open a pull request.
